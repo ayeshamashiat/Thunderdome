@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from arena import run_git, setup_battle
+from arena import init_arena, merge_winner, run_git, setup_battle
 from judge import format_scorecard, rank, score_battle
 
 HIDDEN_TEST = """
@@ -123,3 +123,58 @@ def test_scorecard_text_names_the_winner():
     text = format_scorecard(scorecard)
     assert "🥇 tidy: 2/2 tests" in text
     assert "🏆 Winner: tidy" in text
+
+
+# --- After the battle: merging the winner ---
+
+GOOD_GREET = 'def greet(name="world"):\n    return f"Hello, {name}!"\n'
+
+
+def scored_battle(repo):
+    """A finished, scored battle that 'good' won."""
+    start_battle(repo, ["good", "buggy"])
+    gladiator_commits(repo, "good", {"extras/greet.py": GOOD_GREET})
+    gladiator_commits(repo, "buggy", {"extras/greet.py": "def greet(name):\n    return name\n"})
+    score_battle(repo, "001-greet")
+
+
+def test_merge_brings_the_winners_code_into_main(repo):
+    scored_battle(repo)
+
+    checkpoint = merge_winner(repo, "001-greet")
+
+    assert (repo / "extras" / "greet.py").read_text() == GOOD_GREET
+    assert "merge good's solution" in run_git(repo, "log", "-1", "--format=%s")
+    # The checkpoint points at main as it was before the merge, so it can be undone.
+    assert run_git(repo, "rev-parse", checkpoint) == run_git(repo, "rev-parse", "HEAD^1")
+
+
+def test_merge_refuses_when_main_has_uncommitted_changes(repo):
+    scored_battle(repo)
+    (repo / "core" / "engine.py").write_text("# half-finished edit\n")
+
+    with pytest.raises(ValueError, match="uncommitted"):
+        merge_winner(repo, "001-greet")
+
+
+def test_merge_refuses_without_a_winner(repo):
+    start_battle(repo, ["lazy"])
+    score_battle(repo, "001-greet")
+
+    with pytest.raises(ValueError, match="no winner"):
+        merge_winner(repo, "001-greet")
+
+
+def test_merge_refuses_before_scoring(repo):
+    start_battle(repo, ["good"])
+
+    with pytest.raises(ValueError, match="hasn't been scored"):
+        merge_winner(repo, "001-greet")
+
+
+def test_init_creates_a_folder_per_gladiator(tmp_path):
+    folders = init_arena(tmp_path, ["alpha", "beta"])
+
+    assert [f.name for f in folders] == ["alpha", "beta"]
+    assert all(f.is_dir() for f in folders)
+    assert (tmp_path / "battles").is_dir()

@@ -1,7 +1,10 @@
 """Thunderdome arena engine: sets up and cleans up battles between gladiators.
 
 Usage:
+    python core/arena.py init                              # once, after cloning
     python core/arena.py setup <name> "<task description>"
+    python core/arena.py score <battle-id>
+    python core/arena.py merge <battle-id>                 # only after the user says merge
     python core/arena.py cleanup <battle-id>
 
 Each gladiator gets its own git worktree (a separate folder on its own branch),
@@ -91,6 +94,54 @@ def setup_battle(repo_root: Path, name: str, task: str, gladiators=GLADIATORS) -
     return battle
 
 
+def init_arena(repo_root: Path, gladiators=GLADIATORS) -> list[Path]:
+    """Create each gladiator's folder. Switch needs an agent's directory to exist before creating the agent."""
+    folders = [repo_root / "arena" / gladiator for gladiator in gladiators]
+    for folder in folders + [repo_root / "battles"]:
+        folder.mkdir(parents=True, exist_ok=True)
+    return folders
+
+
+def merge_winner(repo_root: Path, battle_id: str) -> str:
+    """Merge the winner's branch into main, after tagging a checkpoint to undo to.
+
+    Returns the checkpoint tag name.
+    """
+    battle_dir = repo_root / "battles" / battle_id
+    battle = json.loads((battle_dir / "battle.json").read_text())
+    results_file = battle_dir / "results.json"
+    if not results_file.exists():
+        raise ValueError(f"Battle {battle_id} hasn't been scored yet. Run: arena.py score {battle_id}")
+    results = json.loads(results_file.read_text())
+
+    winner = results["winner"]
+    if winner is None:
+        raise ValueError(f"Battle {battle_id} has no winner, so there's nothing to merge.")
+
+    if run_git(repo_root, "branch", "--show-current") != BASE_BRANCH:
+        raise ValueError(f"Switch to '{BASE_BRANCH}' before merging.")
+    # Merging on top of uncommitted changes would mix your work with the winner's.
+    if run_git(repo_root, "status", "--porcelain", "--untracked-files=no"):
+        raise ValueError("You have uncommitted changes on main. Commit or stash them first.")
+
+    # A tag is a permanent bookmark. To undo the merge: git reset --hard <tag>
+    checkpoint = f"checkpoint/before-{battle_id}"
+    run_git(repo_root, "tag", checkpoint)
+
+    branch = battle["gladiators"][winner]["branch"]
+    try:
+        # --no-ff always makes a merge commit, so history shows exactly where a battle landed.
+        run_git(repo_root, "merge", "--no-ff", "-m", f"Battle {battle_id}: merge {winner}'s solution", branch)
+    except subprocess.CalledProcessError:
+        # A conflict leaves files half-merged; abort so main is exactly as it was.
+        run_git(repo_root, "merge", "--abort")
+        raise
+
+    results["merged"] = True
+    results_file.write_text(json.dumps(results, indent=2))
+    return checkpoint
+
+
 def cleanup_battle(repo_root: Path, battle_id: str) -> None:
     """Remove a battle's worktrees and branches. The battle record is kept as history."""
     battle_file = repo_root / "battles" / battle_id / "battle.json"
@@ -108,6 +159,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Thunderdome arena engine")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    commands.add_parser("init", help="create the gladiators' folders (run once after cloning)")
+
+    merge_cmd = commands.add_parser("merge", help="merge the winner into main (checkpoint first)")
+    merge_cmd.add_argument("battle_id", help="e.g. 001-leaderboard")
+
     setup_cmd = commands.add_parser("setup", help="start a new battle")
     setup_cmd.add_argument("name", help="short battle name, e.g. leaderboard")
     setup_cmd.add_argument("task", help="what the gladiators must build")
@@ -121,7 +177,15 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        if args.command == "setup":
+        if args.command == "init":
+            for folder in init_arena(REPO_ROOT):
+                print(f"📁 {folder}")
+            print("✅ Arena ready. Use these folders as the gladiators' Directory in Switch.")
+        elif args.command == "merge":
+            checkpoint = merge_winner(REPO_ROOT, args.battle_id)
+            print(f"🏆 Winner merged into {BASE_BRANCH}.")
+            print(f"↩️  To undo: git reset --hard {checkpoint}")
+        elif args.command == "setup":
             battle = setup_battle(REPO_ROOT, args.name, args.task)
             print(f"⚔️  Battle {battle['id']} is ready!")
             for gladiator, info in battle["gladiators"].items():
@@ -137,7 +201,7 @@ def main() -> None:
         # Show git's own error message, which is usually the most helpful part.
         print(f"❌ git failed: {error.stderr.strip()}", file=sys.stderr)
         sys.exit(1)
-    except FileNotFoundError as error:
+    except (FileNotFoundError, ValueError) as error:
         print(f"❌ {error}", file=sys.stderr)
         sys.exit(1)
 

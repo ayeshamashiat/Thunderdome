@@ -1,2 +1,3 @@
 # Tools needed to develop and test Thunderdome (not needed to run battles).
 pytest
+pyyaml
