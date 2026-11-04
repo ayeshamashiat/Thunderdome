@@ -112,6 +112,9 @@ def main() -> None:
     setup_cmd.add_argument("name", help="short battle name, e.g. leaderboard")
     setup_cmd.add_argument("task", help="what the gladiators must build")
 
+    score_cmd = commands.add_parser("score", help="run hidden tests and rank the gladiators")
+    score_cmd.add_argument("battle_id", help="e.g. 001-leaderboard")
+
     cleanup_cmd = commands.add_parser("cleanup", help="remove a battle's worktrees")
     cleanup_cmd.add_argument("battle_id", help="e.g. 001-leaderboard")
 
@@ -123,11 +126,19 @@ def main() -> None:
             print(f"⚔️  Battle {battle['id']} is ready!")
             for gladiator, info in battle["gladiators"].items():
                 print(f"   {gladiator}: {info['worktree']}")
+        elif args.command == "score":
+            # Imported here, not at the top: judge.py imports arena.py,
+            # so importing it at the top would make the two files import each other.
+            from judge import format_scorecard, score_battle
+            print(format_scorecard(score_battle(REPO_ROOT, args.battle_id)))
         elif args.command == "cleanup":
             cleanup_battle(REPO_ROOT, args.battle_id)
     except subprocess.CalledProcessError as error:
         # Show git's own error message, which is usually the most helpful part.
         print(f"❌ git failed: {error.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError as error:
+        print(f"❌ {error}", file=sys.stderr)
         sys.exit(1)
 
 

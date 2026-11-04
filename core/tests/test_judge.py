@@ -1,0 +1,125 @@
+"""Tests for the judge. Each test stages a tiny fake battle in a throwaway repo."""
+
+import json
+
+import pytest
+
+from arena import run_git, setup_battle
+from judge import format_scorecard, rank, score_battle
+
+HIDDEN_TEST = """
+from extras.greet import greet
+
+def test_greets_by_name():
+    assert greet("Ada") == "Hello, Ada!"
+
+def test_greets_world_by_default():
+    assert greet() == "Hello, world!"
+"""
+
+
+@pytest.fixture
+def repo(tmp_path):
+    run_git(tmp_path, "init", "-b", "main", "-q")
+    run_git(tmp_path, "config", "user.email", "test@example.com")
+    run_git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / ".gitignore").write_text("arena/\nbattles/\n")
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "engine.py").write_text("# arena engine\n")
+    (tmp_path / "extras").mkdir()
+    (tmp_path / "extras" / "README.md").write_text("extras\n")
+    run_git(tmp_path, "add", ".")
+    run_git(tmp_path, "commit", "-q", "-m", "first")
+    return tmp_path
+
+
+def gladiator_commits(repo, gladiator, files: dict[str, str]):
+    """Pretend to be a gladiator: write files in its worktree and commit them."""
+    worktree = repo / "arena" / gladiator / "001-greet"
+    for relative_path, content in files.items():
+        path = worktree / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    run_git(worktree, "add", ".")
+    run_git(worktree, "commit", "-q", "-m", f"{gladiator}'s solution")
+
+
+def start_battle(repo, gladiators):
+    setup_battle(repo, "greet", "write greet()", gladiators)
+    (repo / "battles" / "001-greet" / "hidden_tests" / "test_greet.py").write_text(HIDDEN_TEST)
+
+
+def test_correct_solution_beats_buggy_one(repo):
+    start_battle(repo, ["good", "buggy"])
+    gladiator_commits(repo, "good", {"extras/greet.py":
+        'def greet(name="world"):\n    return f"Hello, {name}!"\n'})
+    gladiator_commits(repo, "buggy", {"extras/greet.py":
+        'def greet(name):\n    return f"Hi {name}"\n'})
+
+    scorecard = score_battle(repo, "001-greet")
+
+    assert scorecard["winner"] == "good"
+    good, buggy = scorecard["ranking"]
+    assert (good["passed"], good["total"]) == (2, 2)
+    assert buggy["passed"] == 0
+
+
+def test_editing_core_is_disqualified(repo):
+    start_battle(repo, ["cheater", "honest"])
+    gladiator_commits(repo, "cheater", {
+        "extras/greet.py": 'def greet(name="world"):\n    return f"Hello, {name}!"\n',
+        "core/engine.py": "# I rewrote the arena\n",
+    })
+    gladiator_commits(repo, "honest", {"extras/greet.py":
+        'def greet(name="world"):\n    return f"Hello, {name}!"\n'})
+
+    scorecard = score_battle(repo, "001-greet")
+
+    assert scorecard["winner"] == "honest"
+    cheater = scorecard["ranking"][-1]
+    assert "core/engine.py" in cheater["disqualified"]
+
+
+def test_uncommitted_work_does_not_count(repo):
+    start_battle(repo, ["lazy"])
+    worktree = repo / "arena" / "lazy" / "001-greet"
+    (worktree / "extras" / "greet.py").write_text('def greet(name="world"):\n    return f"Hello, {name}!"\n')
+
+    scorecard = score_battle(repo, "001-greet")
+
+    assert scorecard["winner"] is None
+    assert scorecard["ranking"][0]["disqualified"] == "no committed changes"
+
+
+def test_results_are_saved_for_extras_to_read(repo):
+    start_battle(repo, ["good"])
+    gladiator_commits(repo, "good", {"extras/greet.py":
+        'def greet(name="world"):\n    return f"Hello, {name}!"\n'})
+
+    score_battle(repo, "001-greet")
+
+    saved = json.loads((repo / "battles" / "001-greet" / "results.json").read_text())
+    assert saved["winner"] == "good"
+
+
+def test_scoring_without_hidden_tests_fails_clearly(repo):
+    setup_battle(repo, "greet", "write greet()", ["good"])
+    with pytest.raises(FileNotFoundError, match="hidden tests"):
+        score_battle(repo, "001-greet")
+
+
+def test_tie_goes_to_the_smaller_solution():
+    results = [
+        {"gladiator": "verbose", "passed": 2, "lines_changed": 90, "disqualified": None},
+        {"gladiator": "tidy", "passed": 2, "lines_changed": 12, "disqualified": None},
+    ]
+    assert [r["gladiator"] for r in rank(results)] == ["tidy", "verbose"]
+
+
+def test_scorecard_text_names_the_winner():
+    scorecard = {"battle_id": "001-greet", "task": "write greet()", "winner": "tidy", "ranking": [
+        {"gladiator": "tidy", "passed": 2, "total": 2, "lines_changed": 12, "disqualified": None, "error": None},
+    ]}
+    text = format_scorecard(scorecard)
+    assert "🥇 tidy: 2/2 tests" in text
+    assert "🏆 Winner: tidy" in text
