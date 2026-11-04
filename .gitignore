@@ -1,0 +1,27 @@
+# --- Thunderdome-specific ---
+
+# Each gladiator's working folder. Battles create git worktrees in here,
+# and a repo must not track its own worktrees.
+arena/
+
+# The judge's private workspace: hidden tests and raw battle results.
+# Git ignores this folder, so it never appears in a gladiator's worktree,
+# which is how the hidden tests stay hidden.
+battles/
+
+# Leftover folder from the first Switch connection test.
+sandbox/
+
+# Personal learning notes. Stay on this machine only.
+docs/how-it-works.md
+CLAUDE.local.md
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# --- Secrets (never commit these) ---
+.env
+*.key
