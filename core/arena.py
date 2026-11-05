@@ -18,6 +18,7 @@ The judge's files (hidden tests, results) always stay in Thunderdome's battles/.
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -49,10 +50,25 @@ def run_git(repo_root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+# Lowercase letters, digits and dashes: safe in folder names AND git branch names.
+BATTLE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
+
+
+def check_battle_name(name: str) -> None:
+    if not BATTLE_NAME.fullmatch(name):
+        raise ValueError(f"Battle name {name!r} must be lowercase letters, digits and dashes, "
+                         "e.g. 'leaderboard' or 'fix-login'.")
+
+
 def next_battle_id(battles_dir: Path, name: str) -> str:
-    """Make a numbered ID like '003-leaderboard' so battles sort in order."""
-    existing = [p for p in battles_dir.iterdir() if p.is_dir()] if battles_dir.exists() else []
-    return f"{len(existing) + 1:03d}-{name}"
+    """Make a numbered ID like '003-leaderboard' so battles sort in order.
+
+    Uses the highest number so far + 1 (not a count), so deleting an old
+    battle folder can never make two battles share a number.
+    """
+    numbers = [int(p.name.split("-", 1)[0]) for p in battles_dir.glob("*")
+               if p.is_dir() and p.name.split("-", 1)[0].isdigit()] if battles_dir.exists() else []
+    return f"{max(numbers, default=0) + 1:03d}-{name}"
 
 
 def branch_name(battle_id: str, gladiator: str) -> str:
@@ -101,6 +117,7 @@ def setup_battle(repo_root: Path, name: str, task: str, gladiators=GLADIATORS,
     target_repo: battle in another git repo (default: Thunderdome itself).
     protected:   paths gladiators must not touch (default: core/ in Thunderdome, nothing elsewhere).
     """
+    check_battle_name(name)
     battles_dir = repo_root / "battles"
     battle_id = next_battle_id(battles_dir, name)
 
@@ -131,14 +148,20 @@ def setup_battle(repo_root: Path, name: str, task: str, gladiators=GLADIATORS,
         "gladiators": {},
     }
 
-    for gladiator in gladiators:
-        branch = branch_name(battle_id, gladiator)
-        # Worktrees always live in Thunderdome's arena/, the gladiators' Switch folders,
-        # even when the code comes from another repo.
-        path = worktree_path(repo_root, battle_id, gladiator)
-        # -b creates a new branch for this gladiator, starting from base_commit.
-        run_git(target, "worktree", "add", "-b", branch, str(path), base_commit)
-        battle["gladiators"][gladiator] = {"branch": branch, "worktree": str(path)}
+    try:
+        for gladiator in gladiators:
+            branch = branch_name(battle_id, gladiator)
+            # Worktrees always live in Thunderdome's arena/, the gladiators' Switch folders,
+            # even when the code comes from another repo.
+            path = worktree_path(repo_root, battle_id, gladiator)
+            # -b creates a new branch for this gladiator, starting from base_commit.
+            run_git(target, "worktree", "add", "-b", branch, str(path), base_commit)
+            battle["gladiators"][gladiator] = {"branch": branch, "worktree": str(path)}
+    except subprocess.CalledProcessError:
+        # All or nothing: undo the gladiators already set up, so a retry starts clean.
+        for info in battle["gladiators"].values():
+            remove_worktree_and_branch(target, info)
+        raise
 
     # The judge's private folder. battles/ is gitignored, so it never appears
     # inside a worktree: that's what keeps the hidden tests hidden.
@@ -157,9 +180,11 @@ def init_arena(repo_root: Path, gladiators=GLADIATORS) -> list[Path]:
     return folders
 
 
-def merge_winner(repo_root: Path, battle_id: str) -> str:
+def merge_winner(repo_root: Path, battle_id: str, pick: str | None = None) -> str:
     """Merge the winner's branch into the battle's base branch, after tagging a checkpoint to undo to.
 
+    pick: after a DRAW, the owner chooses which tied gladiator to merge.
+          Not allowed when there's a clear winner: tests decide, not preferences.
     Returns the checkpoint tag name.
     """
     battle_dir = repo_root / "battles" / battle_id
@@ -171,8 +196,18 @@ def merge_winner(repo_root: Path, battle_id: str) -> str:
     results = json.loads(results_file.read_text())
 
     winner = results["winner"]
+    draw = results.get("draw") or []
+    if pick is not None:
+        if pick not in draw:
+            raise ValueError(f"--pick only works for a draw, and {pick!r} isn't tied for first.")
+        winner = pick
+    elif draw:
+        raise ValueError(f"Battle {battle_id} is a draw between {' and '.join(draw)}. "
+                         f"Choose one: arena.py merge {battle_id} --pick <gladiator>")
     if winner is None:
         raise ValueError(f"Battle {battle_id} has no winner, so there's nothing to merge.")
+    if results.get("merged"):
+        raise ValueError(f"Battle {battle_id} was already merged.")
     if results.get("seal") == "broken":
         raise ValueError(f"Battle {battle_id}'s hidden tests changed after sealing. Refusing to merge.")
 
@@ -196,8 +231,22 @@ def merge_winner(repo_root: Path, battle_id: str) -> str:
         raise
 
     results["merged"] = True
+    results["merged_gladiator"] = winner
     results_file.write_text(json.dumps(results, indent=2))
     return checkpoint
+
+
+def remove_worktree_and_branch(repo: Path, info: dict) -> None:
+    """Remove one gladiator's worktree and branch. Safe to run twice: missing pieces are skipped."""
+    if Path(info["worktree"]).exists():
+        # --force: a gladiator may have left uncommitted files behind.
+        run_git(repo, "worktree", "remove", "--force", info["worktree"])
+    else:
+        # The folder is already gone; forget git's record of it.
+        run_git(repo, "worktree", "prune")
+    if run_git(repo, "branch", "--list", info["branch"]):
+        # -D deletes the branch even if it was never merged (losers' branches).
+        run_git(repo, "branch", "-D", info["branch"])
 
 
 def cleanup_battle(repo_root: Path, battle_id: str) -> None:
@@ -206,10 +255,7 @@ def cleanup_battle(repo_root: Path, battle_id: str) -> None:
     repo = battle_repo(repo_root, battle)
 
     for gladiator, info in battle["gladiators"].items():
-        # --force: a gladiator may have left uncommitted files behind.
-        run_git(repo, "worktree", "remove", "--force", info["worktree"])
-        # -D deletes the branch even if it was never merged (losers' branches).
-        run_git(repo, "branch", "-D", info["branch"])
+        remove_worktree_and_branch(repo, info)
         print(f"🧹 removed {gladiator}'s worktree and branch")
 
 
@@ -221,6 +267,7 @@ def main() -> None:
 
     merge_cmd = commands.add_parser("merge", help="merge the winner into main (checkpoint first)")
     merge_cmd.add_argument("battle_id", help="e.g. 001-leaderboard")
+    merge_cmd.add_argument("--pick", help="after a draw: which tied gladiator to merge")
 
     setup_cmd = commands.add_parser("setup", help="start a new battle")
     setup_cmd.add_argument("name", help="short battle name, e.g. leaderboard")
@@ -246,7 +293,7 @@ def main() -> None:
                 print(f"📁 {folder}")
             print("✅ Arena ready. Use these folders as the gladiators' Directory in Switch.")
         elif args.command == "merge":
-            checkpoint = merge_winner(REPO_ROOT, args.battle_id)
+            checkpoint = merge_winner(REPO_ROOT, args.battle_id, pick=args.pick)
             battle = load_battle(REPO_ROOT, args.battle_id)
             repo = battle_repo(REPO_ROOT, battle)
             print(f"🏆 Winner merged into {battle_base_branch(battle)} of {repo}.")

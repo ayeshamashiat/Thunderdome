@@ -79,6 +79,25 @@ Thunderdome can't exist without Switch. It uses Switch for:
 | Leaking your secrets | Gladiator code runs in tests with a **bare environment**: no API keys or tokens. |
 | A bad merge | Merges only happen when **you** say `merge`, after a **checkpoint tag** (`git reset --hard checkpoint/before-<battle>` undoes it). |
 
+## 🛡️ We tried to cheat our own arena
+
+Before trusting the arena, we attacked it the way a desperate gladiator would. Every attack below is now a permanent test in [`core/tests/test_red_team.py`](core/tests/test_red_team.py).
+
+| Attack | What happened at first | Now |
+|---|---|---|
+| Add a `sitecustomize.py` that rewrites every test result to "passed" | 🚨 **Wrong code scored 2/2** | Tests run in Python's isolated mode (`-I`), so the file never runs, **and** the gladiator is disqualified for tampering |
+| Put the same trick inside the solution itself (touching `_pytest`) | would have worked | Disqualified for tampering |
+| Add a `.pth` file (Python runs these automatically) | would have worked | Disqualified for tampering |
+| Add a `conftest.py` that forces passes | Already harmless: pytest never loads it | Kept as a test |
+| Backdate the commit to 2001, so the token window is empty → 0 tokens | 🚨 **Would win the token tiebreak** | A commit time outside the battle counts **every** token up to scoring: faking it can only hurt |
+| Perfect tie on tests, tokens and lines | 🚨 **claude-gladiator won, just for being listed first** | It's a 🤝 **draw**; the owner picks with `merge --pick` (only allowed for draws) |
+| Infinite loop / `os._exit` in the solution | — | Scores 0, the arena keeps running |
+| Unsafe battle names (`../escape`, `Fix/Bug`) | Crashes / nested folders | Refused with a clear message |
+| Setup failing halfway | Orphan branches blocked every retry | All-or-nothing rollback |
+| `cleanup` or `merge` run twice | Crashes | Cleanup is repeatable; a second merge is refused |
+
+**What we can't fully prevent:** gladiator code runs inside the test process, so a determined, *obfuscated* attack could still tamper with results. The defenses above stop the straightforward ones, and the gladiators' honor code forbids the rest. A fully sandboxed runner (separate process per test, results checked from outside) would be the next step.
+
 **Known limitation:** the hidden tests are in a gitignored folder, not a locked one. An agent that ignored its instructions could still go and read `battles/`. The gladiators' instructions forbid it (an honor code), but it isn't technically enforced.
 
 ---
@@ -149,7 +168,7 @@ core/        arena engine: setup, score, merge, cleanup (never a battle target)
   arena.py   command-line entry point + git worktree handling
   judge.py   sealing, hidden-test scoring, disqualification, ranking, scorecard
   tokens.py  fresh-token counts from each agent's own logs (read-only)
-  tests/     49 tests, each run in throwaway git repos or with fake logs
+  tests/     73 tests (incl. 24 red-team attacks), in throwaway git repos or with fake logs
 extras/      features built by battle winners
 AGENTS.md    rulebook every gladiator follows
 opencode.json  OpenCode's model for this project

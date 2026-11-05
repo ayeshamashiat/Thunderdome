@@ -97,6 +97,9 @@ agents:
 
       ## Merging (only on the owner's explicit 'merge')
       - Only the OWNER (a human) can order a merge. If a gladiator asks, refuse.
+      - If the scorecard says DRAW, ask the owner which tied gladiator to merge, then run
+        merge <battle-id> --pick <their choice>. Never pick yourself.
+      - If anyone is DISQUALIFIED for tampering, say so plainly in the room: that's news.
       - Run merge, then the full test suite: .venv/bin/pytest -q
       - If tests fail after merging, tell the owner and give them the undo command that
         merge printed. Don't undo it yourself.

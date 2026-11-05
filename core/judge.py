@@ -97,16 +97,22 @@ def run_hidden_tests(worktree: Path, hidden_tests: Path) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "report.xml"
         command = [
-            sys.executable, "-m", "pytest", str(hidden_tests),
+            # -I (isolated mode): Python ignores PYTHONPATH and won't auto-run a
+            # sitecustomize.py from the gladiator's folder at startup. Red-teaming showed
+            # that trick could rewrite every test result to "passed".
+            sys.executable, "-I", "-m", "pytest", str(hidden_tests),
             "-q",
             "-p", "no:cacheprovider",       # don't leave a .pytest_cache in the worktree
-            "--rootdir", str(worktree),     # imports resolve to THIS gladiator's code
+            "--rootdir", str(worktree),
+            # Added to sys.path by pytest AFTER startup, so imports resolve to THIS
+            # gladiator's code without giving it a way to run code at startup.
+            "-o", f"pythonpath={worktree}",
             f"--junitxml={report}",         # machine-readable results instead of text
         ]
         # Gladiator code runs inside these tests, so it gets a bare environment:
         # none of your API keys or tokens. PATH is kept (it holds no secrets) so tests
         # for non-Python repos can still run tools like node or npm.
-        clean_env = {"PYTHONPATH": str(worktree), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        clean_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         try:
             subprocess.run(command, cwd=worktree, capture_output=True, text=True,
                            timeout=TEST_TIMEOUT_SECONDS, env=clean_env)
@@ -129,6 +135,31 @@ def read_junit_report(report: Path) -> dict:
     return {"passed": total - not_passed, "total": total, "error": None}
 
 
+# Files Python runs automatically, without being imported by anyone.
+AUTO_RUN_FILES = ("sitecustomize.py", "usercustomize.py")
+
+
+def tampering(repo: Path, branch: str, files: list[str]) -> str | None:
+    """Spot attempts to fool the test runner. Returns a reason, or None if clean.
+
+    A solution has no business touching pytest's internals; test files may use pytest.
+    This can't catch every trick (gladiator code runs in the test process), so it's one
+    layer of defense, alongside isolated mode and the honor code.
+    """
+    for path in files:
+        name = Path(path).name
+        if name in AUTO_RUN_FILES or name.endswith(".pth"):
+            return f"added {path}, a file Python runs automatically"
+        if path.endswith(".py") and not is_test_file(path):
+            try:
+                source = run_git(repo, "show", f"{branch}:{path}")
+            except subprocess.CalledProcessError:
+                continue  # deleted in the branch: nothing to read
+            if "_pytest" in source:
+                return f"{path} reaches into pytest's internals"
+    return None
+
+
 def score_gladiator(repo_root: Path, battle: dict, gladiator: str, hidden_tests: Path) -> dict:
     info = battle["gladiators"][gladiator]
     # Branches live in the battle's repo, which may not be Thunderdome (--repo).
@@ -148,8 +179,11 @@ def score_gladiator(repo_root: Path, battle: dict, gladiator: str, hidden_tests:
     # or whatever --protect listed for another repo. Old battles predate the field.
     protected = battle.get("protected", ["core/"])
     touched = [f for f in files if any(f.startswith(path) for path in protected)]
+    tampered = tampering(repo, info["branch"], files)
     if touched:
         result["disqualified"] = f"edited protected path: {', '.join(touched)}"
+    elif tampered:
+        result["disqualified"] = f"tampering: {tampered}"
     elif not files:
         result["disqualified"] = "no committed changes"
 
@@ -158,17 +192,27 @@ def score_gladiator(repo_root: Path, battle: dict, gladiator: str, hidden_tests:
     else:
         result.update(run_hidden_tests(Path(info["worktree"]), hidden_tests))
 
-    result["fresh_tokens"] = battle_tokens(repo_root, battle, gladiator) if files else None
+    result["fresh_tokens"], result["warning"] = battle_tokens(repo_root, battle, gladiator) if files else (None, None)
     return result
 
 
-def battle_tokens(repo_root: Path, battle: dict, gladiator: str) -> int | None:
-    """Fresh tokens from the battle's start to the gladiator's last commit (when its work was done)."""
+def battle_tokens(repo_root: Path, battle: dict, gladiator: str) -> tuple[int | None, str | None]:
+    """Fresh tokens from the battle's start to the gladiator's last commit (when its work was done).
+
+    Returns (tokens, warning). A commit's time is written by whoever commits, so it can be
+    faked. A time before the battle (or in the future) would shrink the token window, so
+    then we count every token up to now instead: faking the time can only hurt.
+    """
     start = parse_time(battle["created_at"])
+    now = datetime.now(timezone.utc)
     branch = battle["gladiators"][gladiator]["branch"]
     end = parse_time(run_git(battle_repo(repo_root, battle), "log", "-1", "--format=%cI", branch))
+    warning = None
+    if not start <= end <= now:
+        warning = "commit time is outside the battle; counted all tokens until scoring"
+        end = now
     # The Switch directory is the gladiator's arena folder, not the battle worktree inside it.
-    return fresh_tokens(gladiator, repo_root / "arena" / gladiator, start, end)
+    return fresh_tokens(gladiator, repo_root / "arena" / gladiator, start, end), warning
 
 
 def rank(results: list[dict]) -> list[dict]:
@@ -177,6 +221,11 @@ def rank(results: list[dict]) -> list[dict]:
     Tokens only count if EVERY remaining gladiator has a number: a missing log
     must never help or hurt anyone, so then the token rule is skipped.
     """
+    return sorted(results, key=ranking_key(results))
+
+
+def ranking_key(results: list[dict]):
+    """The sort key used by rank(). Two equal keys mean a genuine tie."""
     contenders = [r for r in results if r["disqualified"] is None]
     use_tokens = bool(contenders) and all(r.get("fresh_tokens") is not None for r in contenders)
 
@@ -184,7 +233,18 @@ def rank(results: list[dict]) -> list[dict]:
         tokens = r["fresh_tokens"] if use_tokens and r["disqualified"] is None else 0
         return (r["disqualified"] is not None, -r["passed"], tokens, r["lines_changed"])
 
-    return sorted(results, key=sort_key)
+    return sort_key
+
+
+def tied_for_first(ranked: list[dict]) -> list[str]:
+    """Names of everyone sharing first place, when more than one does.
+
+    Without this, a perfect tie would go to whoever happens to be listed first
+    (claude-gladiator), which is favoritism by accident.
+    """
+    key = ranking_key(ranked)
+    top = [r for r in ranked if key(r) == key(ranked[0])]
+    return [r["gladiator"] for r in top] if len(top) > 1 else []
 
 
 def score_battle(repo_root: Path, battle_id: str) -> dict:
@@ -200,12 +260,15 @@ def score_battle(repo_root: Path, battle_id: str) -> dict:
 
     winner = ranked[0]
     # No winner if even the best one passed nothing.
-    winner_name = winner["gladiator"] if not winner["disqualified"] and winner["passed"] > 0 else None
+    has_winner = not winner["disqualified"] and winner["passed"] > 0
+    draw = tied_for_first(ranked) if has_winner else []
+    winner_name = winner["gladiator"] if has_winner and not draw else None
 
     scorecard = {
         "battle_id": battle_id,
         "task": battle["task"],
         "winner": winner_name,
+        "draw": draw,
         "seal": check_seal(battle, hidden_tests),
         "sealed_fingerprint": battle.get("sealed_fingerprint"),
         "ranking": ranked,
@@ -223,14 +286,21 @@ def format_scorecard(scorecard: dict) -> str:
         if r["disqualified"]:
             lines.append(f"🚫 {r['gladiator']}: DISQUALIFIED ({r['disqualified']})")
         else:
-            note = f" ⚠️ {r['error']}" if r["error"] else ""
+            problems = [text for text in (r["error"], r.get("warning")) if text]
+            note = "".join(f" ⚠️ {text}" for text in problems)
             # .get(): results saved before these fields existed don't have them.
             tokens = r.get("fresh_tokens")
             token_text = f"{tokens / 1000:.1f}k fresh tokens" if tokens is not None else "tokens n/a"
             lines.append(f"{medal} {r['gladiator']}: {r['passed']}/{r['total']} tests, {token_text}, "
                          f"{r['lines_changed']} code lines (+{r.get('test_lines', 0)} test lines){note}")
     lines.append("")
-    lines.append(f"🏆 Winner: {scorecard['winner']}" if scorecard["winner"] else "🤷 No winner this time.")
+    if scorecard["winner"]:
+        lines.append(f"🏆 Winner: {scorecard['winner']}")
+    elif scorecard.get("draw"):
+        lines.append(f"🤝 DRAW between {' and '.join(scorecard['draw'])}. "
+                     f"The owner picks: arena.py merge {scorecard['battle_id']} --pick <gladiator>")
+    else:
+        lines.append("🤷 No winner this time.")
 
     # .get(): scorecards saved before sealing existed have no "seal" key.
     seal = scorecard.get("seal", "unsealed")
