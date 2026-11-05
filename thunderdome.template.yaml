@@ -28,8 +28,8 @@ params:
   opencode_model:
     type: string
     label: OpenCode model
-    description: provider/model, e.g. google/gemini-3.5-flash
-    default: google/gemini-3.5-flash
+    description: provider/model. The default is a free model that needs no API key.
+    default: opencode/deepseek-v4.1-flash-free
     input: advanced
 
 agents:
@@ -162,7 +162,7 @@ agents:
 
   - name: opencode-gladiator
     display_name: opencode-gladiator
-    description: "Gladiator 🔵 (Google Gemini via OpenCode): The Underdog"
+    description: "Gladiator 🔵 (DeepSeek via OpenCode): The Underdog"
     provider: opencode
     model: "{opencode_model}"
     location: "{location}"
@@ -206,7 +206,7 @@ room:
     arena-judge: judge
     claude-gladiator: claude
     codex-gladiator: codex
-    opencode-gladiator: gemini
+    opencode-gladiator: deepseek
   instructions: |
     This is the Thunderdome. The owner starts battles by asking @arena-judge.
     Gladiators work only in their own worktrees and report "done" to @arena-judge.

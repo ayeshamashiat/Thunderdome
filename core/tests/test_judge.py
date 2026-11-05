@@ -178,3 +178,20 @@ def test_init_creates_a_folder_per_gladiator(tmp_path):
     assert [f.name for f in folders] == ["alpha", "beta"]
     assert all(f.is_dir() for f in folders)
     assert (tmp_path / "battles").is_dir()
+
+
+# --- Tiebreaker fairness ---
+
+def test_writing_tests_does_not_cost_you_the_tiebreak(repo):
+    start_battle(repo, ["no_tests", "tested"])
+    gladiator_commits(repo, "no_tests", {"extras/greet.py": GOOD_GREET})
+    gladiator_commits(repo, "tested", {
+        "extras/greet.py": GOOD_GREET,
+        "extras/tests/test_greet.py": "from extras.greet import greet\n\ndef test_it():\n    assert greet()\n",
+    })
+
+    scorecard = score_battle(repo, "001-greet")
+
+    by_name = {r["gladiator"]: r for r in scorecard["ranking"]}
+    assert by_name["tested"]["lines_changed"] == by_name["no_tests"]["lines_changed"]
+    assert by_name["tested"]["test_lines"] == 4

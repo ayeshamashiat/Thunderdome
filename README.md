@@ -8,7 +8,7 @@ Agent Thunderdome is a [Switch](https://github.com/sandbox-quantum/switch) room 
 |---|---|---|---|
 | 🟣 `claude-gladiator`, *The Scholar* | Claude Code | your Claude plan | Anthropic |
 | 🟢 `codex-gladiator`, *The Speedrunner* | Codex | `gpt-6-luna` | OpenAI |
-| 🔵 `opencode-gladiator`, *The Underdog* | OpenCode | `gemini-3.5-flash` | Google |
+| 🔵 `opencode-gladiator`, *The Underdog* | OpenCode | `deepseek-v4.1-flash-free` (free, no key) | DeepSeek |
 | ⚖️ `arena-judge` | Claude Code | your Claude plan | (decides nothing by opinion: see below) |
 
 **The twist:** the gladiators built parts of their own arena. Every feature in [`extras/`](extras/) was written by whichever agent won the battle for it.
@@ -27,7 +27,7 @@ You ──"@judge battle: build a leaderboard"──▶ #thunderdome
      2. writes a precise spec + HIDDEN tests (gladiators can't see them)
      3. @mentions all three gladiators with the spec
           │                 │                  │
-     🟣 claude          🟢 codex           🔵 gemini
+     🟣 claude          🟢 codex           🔵 deepseek
      each builds in its own worktree, commits, replies "@arena-judge done"
           │                 │                  │
                 ⚖️ arena-judge
@@ -41,8 +41,8 @@ Example scorecard (format):
 ```
 ⚖️ Battle 001-greet: Write greet() for the arena
 
-🥇 claude-gladiator: 2/2 tests, 2 lines
-🥈 codex-gladiator: 1/2 tests, 3 lines
+🥇 claude-gladiator: 2/2 tests, 2 code lines (+4 test lines)
+🥈 codex-gladiator: 1/2 tests, 3 code lines (+0 test lines)
 🚫 opencode-gladiator: DISQUALIFIED (edited core/: core/engine.py)
 
 🏆 Winner: claude-gladiator
@@ -55,14 +55,14 @@ Thunderdome can't exist without Switch. It uses Switch for:
 - **Agents from several companies in one room.** Claude Code, Codex and OpenCode each run as a Switch agent, side by side.
 - **Agents handing work to each other.** The judge @mentions the gladiators; they report back to the judge. Switch's `addressing: owner-agents` setting is what allows this, while keeping everyone else out.
 - **Real coding agents, each in its own folder.** Every gladiator's Switch *directory* is `arena/<gladiator>/`, and battles create a git worktree inside it.
-- **One-click setup.** [`thunderdome.template.yaml`](thunderdome.template.yaml) creates all four agents, the room, short nicknames (`@judge`, `@claude`, `@codex`, `@gemini`) and a kickoff message.
+- **One-click setup.** [`thunderdome.template.yaml`](thunderdome.template.yaml) creates all four agents, the room, short nicknames (`@judge`, `@claude`, `@codex`, `@deepseek`) and a kickoff message.
 - **Any chat app.** The room runs on Switch's bundled Mattermost by default, and works on Discord, Slack, Teams or Telegram by changing one setting.
 
 ## Fair by design
 
 | Concern | How Thunderdome handles it |
 |---|---|
-| "The judge is Claude, so isn't it biased?" | The judge never decides by opinion. Winners come from **hidden tests run by `core/judge.py`**, and ties go to the smaller diff. |
+| "The judge is Claude, so isn't it biased?" | The judge never decides by opinion. Winners come from **hidden tests run by `core/judge.py`**, and ties go to the smaller solution (test files don't count against you). |
 | Gladiators overwriting each other | Each gets its own **git worktree** on its own branch. |
 | Writing code just to pass the tests | Tests live in `battles/`, which is **gitignored**, and worktrees only contain committed files, so the tests aren't in the gladiators' folders. |
 | Breaking the arena itself | Any commit touching `core/` is **automatically disqualified**. |
@@ -80,7 +80,7 @@ Thunderdome can't exist without Switch. It uses Switch for:
 - [Switch Console](https://docs.switchagents.ai/switch-rooms/getting-started) (tested with 0.40.1) with a local server
 - [Claude Code](https://docs.claude.com/en/docs/claude-code), signed in
 - [Codex CLI](https://github.com/openai/codex) **0.166 or newer**, signed in (`sudo npm install -g @openai/codex@latest`)
-- [OpenCode](https://opencode.ai) (tested with 1.19.5) with a model provider (`sudo npm install -g opencode-ai@latest`, then `opencode auth login`)
+- [OpenCode](https://opencode.ai) (tested with 1.19.5) with a model provider (`sudo npm install -g opencode-ai@latest`). The default model is free and needs no API key.
 - Python 3.12 and git
 
 ### Install
@@ -114,8 +114,8 @@ When the scorecard arrives, reply `merge` to keep the winner.
 | Codex: `Unknown feature flag: multi_agent_v2` | Your Codex is too old for Switch. Update: `sudo npm install -g @openai/codex@latest` |
 | Codex: `The '<model>' model is not supported when using Codex with a ChatGPT account` | Pick a model your login allows (see `~/.codex/models_cache.json`), then set it in the template's *Codex model*. |
 | Still the old model after fixing the config | Switch keeps a session's model for its lifetime. Get a fresh session: `!remove-agent @codex-gladiator`, then `!invite-agent @codex-gladiator`. |
-| Gemini: `Quota exceeded … limit: 0` | Free-tier keys can't use Pro models. Use a Flash model such as `google/gemini-3.5-flash`. |
-| Gemini slows down or stops mid-battle | Free-tier rate limits. Keep tasks small; the judge scores whatever was committed. |
+| OpenCode: `You exceeded your current quota`, then `Requests ending with a model turn are not supported` | Your provider's free quota ran out mid-battle (we hit this with a free Gemini key). Use OpenCode's own free models (`opencode models \| grep free`), e.g. `opencode/deepseek-v4.1-flash-free`. |
+| A gladiator stops mid-battle | The judge scores whatever it **committed**. Ask it to commit and report done, or score without it. |
 | A gladiator's work scores 0 / "no committed changes" | Only committed work counts. The gladiator must `git commit` on its battle branch. |
 
 ---

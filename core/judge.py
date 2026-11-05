@@ -23,15 +23,28 @@ def changed_files(repo_root: Path, base_commit: str, branch: str) -> list[str]:
     return output.splitlines() if output else []
 
 
-def lines_changed(repo_root: Path, base_commit: str, branch: str) -> int:
-    """Lines added + removed. --numstat prints 'added<TAB>removed<TAB>file' per file."""
-    total = 0
+def is_test_file(path: str) -> bool:
+    """Same conventions pytest uses to find tests: a tests/ folder or a test_*.py file."""
+    parts = Path(path).parts
+    return "tests" in parts[:-1] or parts[-1].startswith("test_")
+
+
+def lines_changed(repo_root: Path, base_commit: str, branch: str) -> dict:
+    """Lines added + removed, split into code and tests.
+
+    Only code lines break ties. Counting test lines too would punish gladiators
+    for writing tests, which AGENTS.md tells them to do.
+    --numstat prints 'added<TAB>removed<TAB>file' per file.
+    """
+    counts = {"code": 0, "tests": 0}
     for line in run_git(repo_root, "diff", "--numstat", base_commit, branch).splitlines():
-        added, removed, _ = line.split("\t", 2)
+        added, removed, path = line.split("\t", 2)
         # Binary files show '-' instead of numbers; they don't count as lines.
-        if added != "-":
-            total += int(added) + int(removed)
-    return total
+        if added == "-":
+            continue
+        kind = "tests" if is_test_file(path) else "code"
+        counts[kind] += int(added) + int(removed)
+    return counts
 
 
 def run_hidden_tests(worktree: Path, hidden_tests: Path) -> dict:
@@ -73,11 +86,13 @@ def read_junit_report(report: Path) -> dict:
 def score_gladiator(repo_root: Path, battle: dict, gladiator: str, hidden_tests: Path) -> dict:
     info = battle["gladiators"][gladiator]
     files = changed_files(repo_root, battle["base_commit"], info["branch"])
+    lines = lines_changed(repo_root, battle["base_commit"], info["branch"])
 
     result = {
         "gladiator": gladiator,
         "files_changed": files,
-        "lines_changed": lines_changed(repo_root, battle["base_commit"], info["branch"]),
+        "lines_changed": lines["code"],   # the tiebreaker
+        "test_lines": lines["tests"],     # shown, never penalized
         "disqualified": None,
     }
 
@@ -130,8 +145,9 @@ def format_scorecard(scorecard: dict) -> str:
             lines.append(f"🚫 {r['gladiator']}: DISQUALIFIED ({r['disqualified']})")
         else:
             note = f" ⚠️ {r['error']}" if r["error"] else ""
+            # .get(): results saved before test_lines existed don't have it.
             lines.append(f"{medal} {r['gladiator']}: {r['passed']}/{r['total']} tests, "
-                         f"{r['lines_changed']} lines{note}")
+                         f"{r['lines_changed']} code lines (+{r.get('test_lines', 0)} test lines){note}")
     lines.append("")
     lines.append(f"🏆 Winner: {scorecard['winner']}" if scorecard["winner"] else "🤷 No winner this time.")
     return "\n".join(lines)
