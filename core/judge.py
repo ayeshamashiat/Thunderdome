@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from arena import run_git
+from tokens import fresh_tokens, parse_time
 
 # A gladiator's tests get this long before they count as failed (e.g. an infinite loop).
 TEST_TIMEOUT_SECONDS = 120
@@ -150,12 +151,33 @@ def score_gladiator(repo_root: Path, battle: dict, gladiator: str, hidden_tests:
         result.update({"passed": 0, "total": 0, "error": None})
     else:
         result.update(run_hidden_tests(Path(info["worktree"]), hidden_tests))
+
+    result["fresh_tokens"] = battle_tokens(repo_root, battle, gladiator) if files else None
     return result
 
 
+def battle_tokens(repo_root: Path, battle: dict, gladiator: str) -> int | None:
+    """Fresh tokens from the battle's start to the gladiator's last commit (when its work was done)."""
+    start = parse_time(battle["created_at"])
+    end = parse_time(run_git(repo_root, "log", "-1", "--format=%cI", battle["gladiators"][gladiator]["branch"]))
+    # The Switch directory is the gladiator's arena folder, not the battle worktree inside it.
+    return fresh_tokens(gladiator, repo_root / "arena" / gladiator, start, end)
+
+
 def rank(results: list[dict]) -> list[dict]:
-    """Most tests passed wins; on a tie, fewer lines changed wins. Disqualified go last."""
-    return sorted(results, key=lambda r: (r["disqualified"] is not None, -r["passed"], r["lines_changed"]))
+    """Most tests passed → fewest fresh tokens → fewest code lines. Disqualified go last.
+
+    Tokens only count if EVERY remaining gladiator has a number: a missing log
+    must never help or hurt anyone, so then the token rule is skipped.
+    """
+    contenders = [r for r in results if r["disqualified"] is None]
+    use_tokens = bool(contenders) and all(r.get("fresh_tokens") is not None for r in contenders)
+
+    def sort_key(r):
+        tokens = r["fresh_tokens"] if use_tokens and r["disqualified"] is None else 0
+        return (r["disqualified"] is not None, -r["passed"], tokens, r["lines_changed"])
+
+    return sorted(results, key=sort_key)
 
 
 def score_battle(repo_root: Path, battle_id: str) -> dict:
@@ -195,8 +217,10 @@ def format_scorecard(scorecard: dict) -> str:
             lines.append(f"🚫 {r['gladiator']}: DISQUALIFIED ({r['disqualified']})")
         else:
             note = f" ⚠️ {r['error']}" if r["error"] else ""
-            # .get(): results saved before test_lines existed don't have it.
-            lines.append(f"{medal} {r['gladiator']}: {r['passed']}/{r['total']} tests, "
+            # .get(): results saved before these fields existed don't have them.
+            tokens = r.get("fresh_tokens")
+            token_text = f"{tokens / 1000:.1f}k fresh tokens" if tokens is not None else "tokens n/a"
+            lines.append(f"{medal} {r['gladiator']}: {r['passed']}/{r['total']} tests, {token_text}, "
                          f"{r['lines_changed']} code lines (+{r.get('test_lines', 0)} test lines){note}")
     lines.append("")
     lines.append(f"🏆 Winner: {scorecard['winner']}" if scorecard["winner"] else "🤷 No winner this time.")

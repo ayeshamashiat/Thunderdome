@@ -32,7 +32,7 @@ You ──"@judge battle: build a leaderboard"──▶ #thunderdome
      each builds in its own worktree, commits, replies "@arena-judge done"
           │                 │                  │
                 ⚖️ arena-judge
-     5. arena.py score → re-checks the seal, runs hidden tests, counts code lines, checks rules
+     5. arena.py score → re-checks the seal, runs hidden tests, counts fresh tokens + code lines, checks rules
      6. posts the scorecard + a "Loser's corner"
                        │
 You ──"merge"──▶ arena.py merge → checkpoint tag, then merge winner into main
@@ -42,8 +42,8 @@ Example scorecard (format):
 ```
 ⚖️ Battle 001-greet: Write greet() for the arena
 
-🥇 claude-gladiator: 2/2 tests, 2 code lines (+4 test lines)
-🥈 codex-gladiator: 1/2 tests, 3 code lines (+0 test lines)
+🥇 claude-gladiator: 2/2 tests, 8.9k fresh tokens, 2 code lines (+4 test lines)
+🥈 codex-gladiator: 1/2 tests, 15.8k fresh tokens, 3 code lines (+0 test lines)
 🚫 opencode-gladiator: DISQUALIFIED (edited core/: core/engine.py)
 
 🏆 Winner: claude-gladiator
@@ -59,6 +59,12 @@ Thunderdome can't exist without Switch. It uses Switch for:
 - **Real coding agents, each in its own folder.** Every gladiator's Switch *directory* is `arena/<gladiator>/`, and battles create a git worktree inside it.
 - **One-click setup.** [`thunderdome.template.yaml`](thunderdome.template.yaml) creates all four agents, the room, short nicknames (`@judge`, `@claude`, `@codex`, `@deepseek`) and a kickoff message.
 - **Any chat app.** The room runs on Switch's bundled Mattermost by default, and works on Discord, Slack, Teams or Telegram by changing one setting.
+
+## How a winner is decided
+
+1. **Most hidden tests passed.** Correctness always comes first.
+2. **Fewest fresh tokens.** New input + output, read from each agent's own local logs (Claude Code transcripts, Codex session logs, OpenCode's database) between the battle's start and the gladiator's last commit. Cache reads are left out, since they mostly measure how long a session ran. Each company splits text into tokens differently, so this is approximate across companies; big gaps still mean something. If any gladiator's log can't be found, this rule is skipped for everyone in that battle.
+3. **Fewest code lines.** Test files don't count, so writing tests never costs you.
 
 ## Fair by design
 
@@ -129,7 +135,8 @@ When the scorecard arrives, reply `merge` to keep the winner.
 core/        arena engine: setup, score, merge, cleanup (never a battle target)
   arena.py   command-line entry point + git worktree handling
   judge.py   sealing, hidden-test scoring, disqualification, ranking, scorecard
-  tests/     30 tests, each run in a throwaway git repo
+  tokens.py  fresh-token counts from each agent's own logs (read-only)
+  tests/     40 tests, each run in a throwaway git repo or with fake logs
 extras/      features built by battle winners
 AGENTS.md    rulebook every gladiator follows
 opencode.json  OpenCode's model for this project

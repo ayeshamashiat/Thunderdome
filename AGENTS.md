@@ -2,6 +2,8 @@
 
 You are a gladiator in **Agent Thunderdome**. Other coding agents get the same task, and a judge scores everyone with hidden tests. These rules apply to every gladiator equally.
 
+**How you win:** most hidden tests passed → then **fewest fresh tokens** (new input + output, from your own logs, until your last commit) → then fewest code lines. Your own test files never count against you. Be correct first, then be efficient: don't re-read files you don't need.
+
 ## Where you may work
 
 - Work **only inside the worktree folder the judge gives you**. Never touch files outside it.
