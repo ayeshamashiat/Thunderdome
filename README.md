@@ -114,6 +114,19 @@ In the room:
 ```
 When the scorecard arrives, reply `merge` to keep the winner.
 
+### Battle in any of your projects
+The arena isn't limited to Thunderdome. Point it at any git repo:
+```
+@judge battle in ~/code/shop: add a with_tax(amount) function to shop/prices.py. Don't touch shop/settings.py
+```
+The judge runs `arena.py setup <name> "<task>" --repo ~/code/shop --protect shop/settings.py`:
+- gladiators branch off whatever branch the project is on (`main`, `master`, `dev`…),
+- editing a `--protect`ed path means disqualification,
+- the winner merges into **that project** (with a checkpoint tag there to undo),
+- hidden tests and results stay in Thunderdome's `battles/`, so nothing extra is added to your project.
+
+Hidden tests are written with pytest. For non-Python projects they can call the project's own tools (e.g. `subprocess.run(["npm", "test"])`).
+
 ---
 
 ## Troubleshooting
@@ -136,7 +149,7 @@ core/        arena engine: setup, score, merge, cleanup (never a battle target)
   arena.py   command-line entry point + git worktree handling
   judge.py   sealing, hidden-test scoring, disqualification, ranking, scorecard
   tokens.py  fresh-token counts from each agent's own logs (read-only)
-  tests/     40 tests, each run in a throwaway git repo or with fake logs
+  tests/     49 tests, each run in throwaway git repos or with fake logs
 extras/      features built by battle winners
 AGENTS.md    rulebook every gladiator follows
 opencode.json  OpenCode's model for this project

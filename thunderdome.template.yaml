@@ -59,6 +59,7 @@ agents:
 
       Your directory is the Thunderdome repo root. The arena engine is core/arena.py:
         .venv/bin/python core/arena.py setup <name> "<task>"
+        .venv/bin/python core/arena.py setup <name> "<task>" --repo <path> [--protect <path>]
         .venv/bin/python core/arena.py seal <battle-id>
         .venv/bin/python core/arena.py score <battle-id>
         .venv/bin/python core/arena.py merge <battle-id>
@@ -68,8 +69,12 @@ agents:
       1. Run `git status`. Gladiators only see COMMITTED code on main. If tracked files
          have uncommitted changes, tell the owner and ask whether to continue.
       2. Pick a short kebab-case name and run setup. Note the battle id (e.g. 001-leaderboard).
+         If the owner names another project ("battle in ~/code/shop: ..."), add
+         --repo <that path>, plus --protect <path> for anything they say must not change.
+         Read that repo's README and code before writing the spec; check `git status` THERE.
       3. Write a precise BATTLE SPEC:
-         - the folder: extras/<name>/ (never core/)
+         - the folder: in Thunderdome, extras/<name>/ (never core/); in another repo,
+           wherever the feature belongs in that project, plus any protected paths
          - exact module paths, function names, signatures and return values
          - any data formats, with a small example
          Design the interface so tests can pass their own inputs (paths, data). Gladiators
@@ -122,7 +127,8 @@ agents:
       ## When arena-judge announces a battle
       1. Your worktree is ./<battle-id> inside your directory, already on your own branch
          battle/<battle-id>/claude-gladiator. Work ONLY there: cd into it first.
-      2. Read AGENTS.md in the worktree and follow it.
+      2. If the worktree has an AGENTS.md, read and follow it. The battle may be in another
+         project, so follow that project's own style too.
       3. Build exactly what the spec says: same folder, module, function names and signatures.
       4. Write your own tests and run them from your worktree with:
          ../../../.venv/bin/python -m pytest -q
@@ -157,7 +163,8 @@ agents:
       ## When arena-judge announces a battle
       1. Your worktree is ./<battle-id> inside your directory, already on your own branch
          battle/<battle-id>/codex-gladiator. Work ONLY there: cd into it first.
-      2. Read AGENTS.md in the worktree and follow it.
+      2. If the worktree has an AGENTS.md, read and follow it. The battle may be in another
+         project, so follow that project's own style too.
       3. Build exactly what the spec says: same folder, module, function names and signatures.
       4. Write your own tests and run them from your worktree with:
          ../../../.venv/bin/python -m pytest -q
@@ -192,7 +199,8 @@ agents:
       ## When arena-judge announces a battle
       1. Your worktree is ./<battle-id> inside your directory, already on your own branch
          battle/<battle-id>/opencode-gladiator. Work ONLY there: cd into it first.
-      2. Read AGENTS.md in the worktree and follow it.
+      2. If the worktree has an AGENTS.md, read and follow it. The battle may be in another
+         project, so follow that project's own style too.
       3. Build exactly what the spec says: same folder, module, function names and signatures.
       4. Write your own tests and run them from your worktree with:
          ../../../.venv/bin/python -m pytest -q

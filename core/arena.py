@@ -3,6 +3,7 @@
 Usage:
     python core/arena.py init                              # once, after cloning
     python core/arena.py setup <name> "<task description>"
+    python core/arena.py setup <name> "<task>" --repo /path/to/project [--protect src/config/]
     python core/arena.py seal <battle-id>                  # after writing hidden tests, before announcing
     python core/arena.py score <battle-id>
     python core/arena.py merge <battle-id>                 # only after the user says merge
@@ -10,6 +11,9 @@ Usage:
 
 Each gladiator gets its own git worktree (a separate folder on its own branch),
 so no gladiator can see or overwrite another's work.
+
+A battle can happen in Thunderdome itself or in any other git repo (--repo).
+The judge's files (hidden tests, results) always stay in Thunderdome's battles/.
 """
 
 import argparse
@@ -24,7 +28,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 GLADIATORS = ["claude-gladiator", "codex-gladiator", "opencode-gladiator"]
 
-# Battles always start from this branch, so every gladiator gets the same code.
+# Battles in Thunderdome itself start from this branch. Battles in other repos
+# start from whatever branch that repo is on (it may be master, dev, ...).
 BASE_BRANCH = "main"
 
 
@@ -60,30 +65,79 @@ def worktree_path(repo_root: Path, battle_id: str, gladiator: str) -> Path:
     return repo_root / "arena" / gladiator / battle_id
 
 
-def setup_battle(repo_root: Path, name: str, task: str, gladiators=GLADIATORS) -> dict:
-    """Create one worktree + branch per gladiator and the judge's battle folder."""
+def load_battle(repo_root: Path, battle_id: str) -> dict:
+    return json.loads((repo_root / "battles" / battle_id / "battle.json").read_text())
+
+
+def battle_repo(repo_root: Path, battle: dict) -> Path:
+    """The repo a battle happens in. Battles from before --repo existed were all in Thunderdome."""
+    return Path(battle.get("repo", repo_root))
+
+
+def battle_base_branch(battle: dict) -> str:
+    return battle.get("base_branch", BASE_BRANCH)
+
+
+def resolve_target_repo(target_repo) -> tuple[Path, str]:
+    """Check the target is a git repo on a branch. Returns (repo top folder, current branch)."""
+    target = Path(target_repo).expanduser().resolve()
+    if not target.is_dir():
+        raise ValueError(f"{target} is not a folder.")
+    try:
+        # A subfolder of a repo is fine: always work from the repo's top folder.
+        target = Path(run_git(target, "rev-parse", "--show-toplevel"))
+    except subprocess.CalledProcessError:
+        raise ValueError(f"{target} is not a git repository.")
+    branch = run_git(target, "branch", "--show-current")
+    if not branch:
+        raise ValueError(f"{target} isn't on a branch (detached HEAD). Check out a branch first.")
+    return target, branch
+
+
+def setup_battle(repo_root: Path, name: str, task: str, gladiators=GLADIATORS,
+                 target_repo=None, protected=None) -> dict:
+    """Create one worktree + branch per gladiator and the judge's battle folder.
+
+    target_repo: battle in another git repo (default: Thunderdome itself).
+    protected:   paths gladiators must not touch (default: core/ in Thunderdome, nothing elsewhere).
+    """
     battles_dir = repo_root / "battles"
     battle_id = next_battle_id(battles_dir, name)
 
-    # Gladiators only see COMMITTED code, so uncommitted changes would be missing.
-    if run_git(repo_root, "status", "--porcelain", "--untracked-files=no"):
-        print(f"⚠️  You have uncommitted changes. Gladiators will only see what's committed on '{BASE_BRANCH}'.")
+    if target_repo is None:
+        target, base_branch = repo_root, BASE_BRANCH
+    else:
+        target, base_branch = resolve_target_repo(target_repo)
 
-    base_commit = run_git(repo_root, "rev-parse", BASE_BRANCH)
+    is_thunderdome = target.resolve() == repo_root.resolve()
+    if protected is None:
+        protected = ["core/"] if is_thunderdome else []
+
+    # Gladiators only see COMMITTED code, so uncommitted changes would be missing.
+    if run_git(target, "status", "--porcelain", "--untracked-files=no"):
+        print(f"⚠️  {target} has uncommitted changes. Gladiators only see what's committed on '{base_branch}'.")
+
+    base_commit = run_git(target, "rev-parse", base_branch)
 
     battle = {
         "id": battle_id,
         "task": task,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "repo": str(target),
+        "base_branch": base_branch,
         "base_commit": base_commit,
+        # Normalise "./src/config" to "src/config", so it matches git's file paths.
+        "protected": [p.removeprefix("./") for p in protected],
         "gladiators": {},
     }
 
     for gladiator in gladiators:
         branch = branch_name(battle_id, gladiator)
+        # Worktrees always live in Thunderdome's arena/, the gladiators' Switch folders,
+        # even when the code comes from another repo.
         path = worktree_path(repo_root, battle_id, gladiator)
         # -b creates a new branch for this gladiator, starting from base_commit.
-        run_git(repo_root, "worktree", "add", "-b", branch, str(path), base_commit)
+        run_git(target, "worktree", "add", "-b", branch, str(path), base_commit)
         battle["gladiators"][gladiator] = {"branch": branch, "worktree": str(path)}
 
     # The judge's private folder. battles/ is gitignored, so it never appears
@@ -104,12 +158,13 @@ def init_arena(repo_root: Path, gladiators=GLADIATORS) -> list[Path]:
 
 
 def merge_winner(repo_root: Path, battle_id: str) -> str:
-    """Merge the winner's branch into main, after tagging a checkpoint to undo to.
+    """Merge the winner's branch into the battle's base branch, after tagging a checkpoint to undo to.
 
     Returns the checkpoint tag name.
     """
     battle_dir = repo_root / "battles" / battle_id
-    battle = json.loads((battle_dir / "battle.json").read_text())
+    battle = load_battle(repo_root, battle_id)
+    repo, base_branch = battle_repo(repo_root, battle), battle_base_branch(battle)
     results_file = battle_dir / "results.json"
     if not results_file.exists():
         raise ValueError(f"Battle {battle_id} hasn't been scored yet. Run: arena.py score {battle_id}")
@@ -121,23 +176,23 @@ def merge_winner(repo_root: Path, battle_id: str) -> str:
     if results.get("seal") == "broken":
         raise ValueError(f"Battle {battle_id}'s hidden tests changed after sealing. Refusing to merge.")
 
-    if run_git(repo_root, "branch", "--show-current") != BASE_BRANCH:
-        raise ValueError(f"Switch to '{BASE_BRANCH}' before merging.")
+    if run_git(repo, "branch", "--show-current") != base_branch:
+        raise ValueError(f"Switch {repo} to '{base_branch}' before merging.")
     # Merging on top of uncommitted changes would mix your work with the winner's.
-    if run_git(repo_root, "status", "--porcelain", "--untracked-files=no"):
-        raise ValueError("You have uncommitted changes on main. Commit or stash them first.")
+    if run_git(repo, "status", "--porcelain", "--untracked-files=no"):
+        raise ValueError(f"{repo} has uncommitted changes on {base_branch}. Commit or stash them first.")
 
     # A tag is a permanent bookmark. To undo the merge: git reset --hard <tag>
     checkpoint = f"checkpoint/before-{battle_id}"
-    run_git(repo_root, "tag", checkpoint)
+    run_git(repo, "tag", checkpoint)
 
     branch = battle["gladiators"][winner]["branch"]
     try:
         # --no-ff always makes a merge commit, so history shows exactly where a battle landed.
-        run_git(repo_root, "merge", "--no-ff", "-m", f"Battle {battle_id}: merge {winner}'s solution", branch)
+        run_git(repo, "merge", "--no-ff", "-m", f"Battle {battle_id}: merge {winner}'s solution", branch)
     except subprocess.CalledProcessError:
-        # A conflict leaves files half-merged; abort so main is exactly as it was.
-        run_git(repo_root, "merge", "--abort")
+        # A conflict leaves files half-merged; abort so the branch is exactly as it was.
+        run_git(repo, "merge", "--abort")
         raise
 
     results["merged"] = True
@@ -147,14 +202,14 @@ def merge_winner(repo_root: Path, battle_id: str) -> str:
 
 def cleanup_battle(repo_root: Path, battle_id: str) -> None:
     """Remove a battle's worktrees and branches. The battle record is kept as history."""
-    battle_file = repo_root / "battles" / battle_id / "battle.json"
-    battle = json.loads(battle_file.read_text())
+    battle = load_battle(repo_root, battle_id)
+    repo = battle_repo(repo_root, battle)
 
     for gladiator, info in battle["gladiators"].items():
         # --force: a gladiator may have left uncommitted files behind.
-        run_git(repo_root, "worktree", "remove", "--force", info["worktree"])
+        run_git(repo, "worktree", "remove", "--force", info["worktree"])
         # -D deletes the branch even if it was never merged (losers' branches).
-        run_git(repo_root, "branch", "-D", info["branch"])
+        run_git(repo, "branch", "-D", info["branch"])
         print(f"🧹 removed {gladiator}'s worktree and branch")
 
 
@@ -170,6 +225,9 @@ def main() -> None:
     setup_cmd = commands.add_parser("setup", help="start a new battle")
     setup_cmd.add_argument("name", help="short battle name, e.g. leaderboard")
     setup_cmd.add_argument("task", help="what the gladiators must build")
+    setup_cmd.add_argument("--repo", help="battle in this git repo instead of Thunderdome")
+    setup_cmd.add_argument("--protect", action="append", default=None, metavar="PATH",
+                           help="a path gladiators must not edit (repeatable)")
 
     seal_cmd = commands.add_parser("seal", help="fingerprint the hidden tests before the battle starts")
     seal_cmd.add_argument("battle_id", help="e.g. 001-leaderboard")
@@ -189,11 +247,16 @@ def main() -> None:
             print("✅ Arena ready. Use these folders as the gladiators' Directory in Switch.")
         elif args.command == "merge":
             checkpoint = merge_winner(REPO_ROOT, args.battle_id)
-            print(f"🏆 Winner merged into {BASE_BRANCH}.")
-            print(f"↩️  To undo: git reset --hard {checkpoint}")
+            battle = load_battle(REPO_ROOT, args.battle_id)
+            repo = battle_repo(REPO_ROOT, battle)
+            print(f"🏆 Winner merged into {battle_base_branch(battle)} of {repo}.")
+            print(f"↩️  To undo: git -C {repo} reset --hard {checkpoint}")
         elif args.command == "setup":
-            battle = setup_battle(REPO_ROOT, args.name, args.task)
-            print(f"⚔️  Battle {battle['id']} is ready!")
+            battle = setup_battle(REPO_ROOT, args.name, args.task,
+                                  target_repo=args.repo, protected=args.protect)
+            print(f"⚔️  Battle {battle['id']} is ready in {battle['repo']} (from '{battle['base_branch']}').")
+            if battle["protected"]:
+                print(f"   🔒 Protected: {', '.join(battle['protected'])}")
             for gladiator, info in battle["gladiators"].items():
                 print(f"   {gladiator}: {info['worktree']}")
         elif args.command == "seal":

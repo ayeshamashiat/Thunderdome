@@ -6,6 +6,7 @@ Only COMMITTED work on a gladiator's branch counts.
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -13,7 +14,7 @@ import xml.etree.ElementTree as ElementTree
 from datetime import datetime, timezone
 from pathlib import Path
 
-from arena import run_git
+from arena import battle_repo, run_git
 from tokens import fresh_tokens, parse_time
 
 # A gladiator's tests get this long before they count as failed (e.g. an infinite loop).
@@ -103,8 +104,9 @@ def run_hidden_tests(worktree: Path, hidden_tests: Path) -> dict:
             f"--junitxml={report}",         # machine-readable results instead of text
         ]
         # Gladiator code runs inside these tests, so it gets a bare environment:
-        # none of your API keys or tokens, just enough to find Python and its own code.
-        clean_env = {"PYTHONPATH": str(worktree), "PATH": "/usr/bin:/bin"}
+        # none of your API keys or tokens. PATH is kept (it holds no secrets) so tests
+        # for non-Python repos can still run tools like node or npm.
+        clean_env = {"PYTHONPATH": str(worktree), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         try:
             subprocess.run(command, cwd=worktree, capture_output=True, text=True,
                            timeout=TEST_TIMEOUT_SECONDS, env=clean_env)
@@ -129,8 +131,10 @@ def read_junit_report(report: Path) -> dict:
 
 def score_gladiator(repo_root: Path, battle: dict, gladiator: str, hidden_tests: Path) -> dict:
     info = battle["gladiators"][gladiator]
-    files = changed_files(repo_root, battle["base_commit"], info["branch"])
-    lines = lines_changed(repo_root, battle["base_commit"], info["branch"])
+    # Branches live in the battle's repo, which may not be Thunderdome (--repo).
+    repo = battle_repo(repo_root, battle)
+    files = changed_files(repo, battle["base_commit"], info["branch"])
+    lines = lines_changed(repo, battle["base_commit"], info["branch"])
 
     result = {
         "gladiator": gladiator,
@@ -140,10 +144,12 @@ def score_gladiator(repo_root: Path, battle: dict, gladiator: str, hidden_tests:
         "disqualified": None,
     }
 
-    # Rule from AGENTS.md: core/ runs the arena itself and is off-limits.
-    touched_core = [f for f in files if f.startswith("core/")]
-    if touched_core:
-        result["disqualified"] = f"edited core/: {', '.join(touched_core)}"
+    # Protected paths are off-limits: core/ in Thunderdome (it runs the arena),
+    # or whatever --protect listed for another repo. Old battles predate the field.
+    protected = battle.get("protected", ["core/"])
+    touched = [f for f in files if any(f.startswith(path) for path in protected)]
+    if touched:
+        result["disqualified"] = f"edited protected path: {', '.join(touched)}"
     elif not files:
         result["disqualified"] = "no committed changes"
 
@@ -159,7 +165,8 @@ def score_gladiator(repo_root: Path, battle: dict, gladiator: str, hidden_tests:
 def battle_tokens(repo_root: Path, battle: dict, gladiator: str) -> int | None:
     """Fresh tokens from the battle's start to the gladiator's last commit (when its work was done)."""
     start = parse_time(battle["created_at"])
-    end = parse_time(run_git(repo_root, "log", "-1", "--format=%cI", battle["gladiators"][gladiator]["branch"]))
+    branch = battle["gladiators"][gladiator]["branch"]
+    end = parse_time(run_git(battle_repo(repo_root, battle), "log", "-1", "--format=%cI", branch))
     # The Switch directory is the gladiator's arena folder, not the battle worktree inside it.
     return fresh_tokens(gladiator, repo_root / "arena" / gladiator, start, end)
 
