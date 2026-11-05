@@ -4,6 +4,9 @@ Usage:
     python core/arena.py init                              # once, after cloning
     python core/arena.py setup <name> "<task description>"
     python core/arena.py setup <name> "<task>" --repo /path/to/project [--protect src/config/]
+    python core/arena.py setup <name> "<task>" --mode blind --deliverable entries/story.md
+    python core/arena.py ballot <battle-id>                # blind battles: entries become A, B, C
+    python core/arena.py vote <battle-id> <letter>         # blind battles: the owner's vote
     python core/arena.py seal <battle-id>                  # after writing hidden tests, before announcing
     python core/arena.py score <battle-id>
     python core/arena.py merge <battle-id>                 # only after the user says merge
@@ -110,14 +113,23 @@ def resolve_target_repo(target_repo) -> tuple[Path, str]:
     return target, branch
 
 
+MODES = ("tests", "blind")
+
+
 def setup_battle(repo_root: Path, name: str, task: str, gladiators=GLADIATORS,
-                 target_repo=None, protected=None) -> dict:
+                 target_repo=None, protected=None, mode="tests", deliverable=None) -> dict:
     """Create one worktree + branch per gladiator and the judge's battle folder.
 
     target_repo: battle in another git repo (default: Thunderdome itself).
     protected:   paths gladiators must not touch (default: core/ in Thunderdome, nothing elsewhere).
+    mode:        "tests" (hidden tests decide) or "blind" (the owner votes on anonymous entries).
+    deliverable: blind battles only: the one file each gladiator must commit.
     """
     check_battle_name(name)
+    if mode not in MODES:
+        raise ValueError(f"Mode must be one of: {', '.join(MODES)}")
+    if mode == "blind" and not deliverable:
+        raise ValueError("A blind battle needs --deliverable: the file each gladiator writes, e.g. entries/story.md")
     battles_dir = repo_root / "battles"
     battle_id = next_battle_id(battles_dir, name)
 
@@ -145,6 +157,8 @@ def setup_battle(repo_root: Path, name: str, task: str, gladiators=GLADIATORS,
         "base_commit": base_commit,
         # Normalise "./src/config" to "src/config", so it matches git's file paths.
         "protected": [p.removeprefix("./") for p in protected],
+        "mode": mode,
+        "deliverable": deliverable.removeprefix("./") if deliverable else None,
         "gladiators": {},
     }
 
@@ -275,6 +289,17 @@ def main() -> None:
     setup_cmd.add_argument("--repo", help="battle in this git repo instead of Thunderdome")
     setup_cmd.add_argument("--protect", action="append", default=None, metavar="PATH",
                            help="a path gladiators must not edit (repeatable)")
+    setup_cmd.add_argument("--mode", choices=MODES, default="tests",
+                           help="tests: hidden tests decide (default); blind: the owner votes on anonymous entries")
+    setup_cmd.add_argument("--deliverable", metavar="PATH",
+                           help="blind battles: the one file each gladiator must commit")
+
+    ballot_cmd = commands.add_parser("ballot", help="blind battles: shuffle entries into A, B, C")
+    ballot_cmd.add_argument("battle_id")
+
+    vote_cmd = commands.add_parser("vote", help="blind battles: record the owner's vote and reveal")
+    vote_cmd.add_argument("battle_id")
+    vote_cmd.add_argument("letter", help="e.g. B")
 
     seal_cmd = commands.add_parser("seal", help="fingerprint the hidden tests before the battle starts")
     seal_cmd.add_argument("battle_id", help="e.g. 001-leaderboard")
@@ -299,8 +324,8 @@ def main() -> None:
             print(f"🏆 Winner merged into {battle_base_branch(battle)} of {repo}.")
             print(f"↩️  To undo: git -C {repo} reset --hard {checkpoint}")
         elif args.command == "setup":
-            battle = setup_battle(REPO_ROOT, args.name, args.task,
-                                  target_repo=args.repo, protected=args.protect)
+            battle = setup_battle(REPO_ROOT, args.name, args.task, target_repo=args.repo,
+                                  protected=args.protect, mode=args.mode, deliverable=args.deliverable)
             print(f"⚔️  Battle {battle['id']} is ready in {battle['repo']} (from '{battle['base_branch']}').")
             if battle["protected"]:
                 print(f"   🔒 Protected: {', '.join(battle['protected'])}")
@@ -316,6 +341,12 @@ def main() -> None:
             # so importing it at the top would make the two files import each other.
             from judge import format_scorecard, score_battle
             print(format_scorecard(score_battle(REPO_ROOT, args.battle_id)))
+        elif args.command == "ballot":
+            from blind import format_ballot, make_ballot
+            print(format_ballot(make_ballot(REPO_ROOT, args.battle_id)))
+        elif args.command == "vote":
+            from blind import cast_vote, format_reveal
+            print(format_reveal(cast_vote(REPO_ROOT, args.battle_id, args.letter)))
         elif args.command == "cleanup":
             cleanup_battle(REPO_ROOT, args.battle_id)
     except subprocess.CalledProcessError as error:

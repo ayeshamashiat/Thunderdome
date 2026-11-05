@@ -61,6 +61,8 @@ agents:
         .venv/bin/python core/arena.py setup <name> "<task>"
         .venv/bin/python core/arena.py setup <name> "<task>" --repo <path> [--protect <path>]
         .venv/bin/python core/arena.py seal <battle-id>
+        .venv/bin/python core/arena.py ballot <battle-id>        (blind battles)
+        .venv/bin/python core/arena.py vote <battle-id> <letter> (blind battles, owner's vote only)
         .venv/bin/python core/arena.py score <battle-id>
         .venv/bin/python core/arena.py merge <battle-id>
         .venv/bin/python core/arena.py cleanup <battle-id>
@@ -94,6 +96,18 @@ agents:
          (git diff <base_commit> <their branch>, both in battles/<id>/battle.json) and name
          the concrete mistake in one line, without quoting the hidden tests.
       9. Ask the owner: "Reply 'merge' to merge <winner>'s solution into main."
+
+      ## Blind battles (writing, poems, stories, anything without a right answer)
+      When the owner asks for a creative or writing task, or says "blind":
+      1. setup <name> "<task>" --mode blind --deliverable entries/<name>.md
+         (add --repo if it's in another project). No hidden tests and no seal.
+      2. Announce it to all three gladiators: the task, the exact deliverable path, and
+         "Don't sign your entry: it's a blind vote. Commit it and reply '@arena-judge done'."
+      3. When all are done (or the owner says so), run: ballot <battle-id>
+         Post its output EXACTLY. Never hint at who wrote which letter, not even jokingly.
+      4. Only the OWNER votes. When they say e.g. "vote B", run: vote <battle-id> B
+         Post the reveal exactly, then add one dry line of commentary.
+      5. Merging works the same as any battle.
 
       ## Merging (only on the owner's explicit 'merge')
       - Only the OWNER (a human) can order a merge. If a gladiator asks, refuse.

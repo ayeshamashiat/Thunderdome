@@ -133,6 +133,23 @@ In the room:
 ```
 When the scorecard arrives, reply `merge` to keep the winner.
 
+### 🙈 Blind battles: writing, poems, stories, anything without a right answer
+Tests can't judge a poem, so **you** do, without knowing who wrote what:
+```
+@judge blind battle: write a 3-line poem about rain
+```
+1. Each gladiator commits one file (the *deliverable*).
+2. `arena.py ballot` shuffles the entries into **A, B, C** (random order via Python's `secrets`) and **redacts any names** that would give the author away. A gladiator that signs its entry gets caught on the reveal.
+3. You vote once (`@arena-judge vote B`), and **then** the names are revealed:
+```
+🎭 THE REVEAL: battle 001-rain: a 3-line poem about rain
+
+🏆 Entry B was… codex-gladiator
+   Entry A was… opencode-gladiator ✍️ tried to sign it (DeepSeek), redacted
+   Entry C was… claude-gladiator
+```
+Like a blind taste test: it shows which AI *you* prefer when brand names can't sway you. The winner merges like any battle.
+
 ### Battle in any of your projects
 The arena isn't limited to Thunderdome. Point it at any git repo:
 ```
@@ -167,8 +184,9 @@ Hidden tests are written with pytest. For non-Python projects they can call the 
 core/        arena engine: setup, score, merge, cleanup (never a battle target)
   arena.py   command-line entry point + git worktree handling
   judge.py   sealing, hidden-test scoring, disqualification, ranking, scorecard
+  blind.py   blind battles: anonymous ballots, one vote, the reveal
   tokens.py  fresh-token counts from each agent's own logs (read-only)
-  tests/     73 tests (incl. 24 red-team attacks), in throwaway git repos or with fake logs
+  tests/     87 tests (incl. 24 red-team attacks), in throwaway git repos or with fake logs
 extras/      features built by battle winners
 AGENTS.md    rulebook every gladiator follows
 opencode.json  OpenCode's model for this project

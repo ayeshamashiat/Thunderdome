@@ -252,6 +252,8 @@ def score_battle(repo_root: Path, battle_id: str) -> dict:
     battle = json.loads((battle_dir / "battle.json").read_text())
     hidden_tests = battle_dir / "hidden_tests"
 
+    if battle.get("mode") == "blind":
+        raise ValueError(f"Battle {battle_id} is a blind battle: use 'ballot' and then 'vote', not 'score'.")
     if not any(hidden_tests.glob("test_*.py")):
         raise FileNotFoundError(f"No hidden tests in {hidden_tests}. The judge must write them first.")
 
