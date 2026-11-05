@@ -5,7 +5,7 @@ import json
 import pytest
 
 from arena import init_arena, merge_winner, run_git, setup_battle
-from judge import format_scorecard, rank, score_battle
+from judge import format_scorecard, rank, score_battle, seal_battle
 
 HIDDEN_TEST = """
 from extras.greet import greet
@@ -195,3 +195,63 @@ def test_writing_tests_does_not_cost_you_the_tiebreak(repo):
     by_name = {r["gladiator"]: r for r in scorecard["ranking"]}
     assert by_name["tested"]["lines_changed"] == by_name["no_tests"]["lines_changed"]
     assert by_name["tested"]["test_lines"] == 4
+
+
+# --- Sealing the hidden tests ---
+
+def hidden_test_file(repo):
+    return repo / "battles" / "001-greet" / "hidden_tests" / "test_greet.py"
+
+
+def test_sealed_and_untouched_tests_are_reported_intact(repo):
+    start_battle(repo, ["good"])
+    seal_battle(repo, "001-greet")
+    gladiator_commits(repo, "good", {"extras/greet.py": GOOD_GREET})
+
+    scorecard = score_battle(repo, "001-greet")
+
+    assert scorecard["seal"] == "intact"
+    assert "🔒" in format_scorecard(scorecard)
+
+
+def test_a_judge_editing_tests_after_the_seal_is_caught(repo):
+    start_battle(repo, ["good"])
+    seal_battle(repo, "001-greet")
+    gladiator_commits(repo, "good", {"extras/greet.py": GOOD_GREET})
+    # The judge sees the solution, then quietly makes the tests easier:
+    hidden_test_file(repo).write_text("def test_free_points():\n    assert True\n")
+
+    scorecard = score_battle(repo, "001-greet")
+
+    assert scorecard["seal"] == "broken"
+    assert "🚨" in format_scorecard(scorecard)
+    with pytest.raises(ValueError, match="changed after sealing"):
+        merge_winner(repo, "001-greet")
+
+
+def test_seals_cannot_be_redone(repo):
+    start_battle(repo, ["good"])
+    seal_battle(repo, "001-greet")
+
+    with pytest.raises(ValueError, match="already sealed"):
+        seal_battle(repo, "001-greet")
+
+
+def test_running_the_tests_does_not_break_the_seal(repo):
+    # Running pytest creates __pycache__ inside hidden_tests; that must not count as tampering.
+    start_battle(repo, ["good"])
+    seal_battle(repo, "001-greet")
+    gladiator_commits(repo, "good", {"extras/greet.py": GOOD_GREET})
+
+    score_battle(repo, "001-greet")
+    assert score_battle(repo, "001-greet")["seal"] == "intact"
+
+
+def test_unsealed_battles_are_flagged(repo):
+    start_battle(repo, ["good"])
+    gladiator_commits(repo, "good", {"extras/greet.py": GOOD_GREET})
+
+    scorecard = score_battle(repo, "001-greet")
+
+    assert scorecard["seal"] == "unsealed"
+    assert "never sealed" in format_scorecard(scorecard)

@@ -3,6 +3,7 @@
 Usage:
     python core/arena.py init                              # once, after cloning
     python core/arena.py setup <name> "<task description>"
+    python core/arena.py seal <battle-id>                  # after writing hidden tests, before announcing
     python core/arena.py score <battle-id>
     python core/arena.py merge <battle-id>                 # only after the user says merge
     python core/arena.py cleanup <battle-id>
@@ -117,6 +118,8 @@ def merge_winner(repo_root: Path, battle_id: str) -> str:
     winner = results["winner"]
     if winner is None:
         raise ValueError(f"Battle {battle_id} has no winner, so there's nothing to merge.")
+    if results.get("seal") == "broken":
+        raise ValueError(f"Battle {battle_id}'s hidden tests changed after sealing. Refusing to merge.")
 
     if run_git(repo_root, "branch", "--show-current") != BASE_BRANCH:
         raise ValueError(f"Switch to '{BASE_BRANCH}' before merging.")
@@ -168,6 +171,9 @@ def main() -> None:
     setup_cmd.add_argument("name", help="short battle name, e.g. leaderboard")
     setup_cmd.add_argument("task", help="what the gladiators must build")
 
+    seal_cmd = commands.add_parser("seal", help="fingerprint the hidden tests before the battle starts")
+    seal_cmd.add_argument("battle_id", help="e.g. 001-leaderboard")
+
     score_cmd = commands.add_parser("score", help="run hidden tests and rank the gladiators")
     score_cmd.add_argument("battle_id", help="e.g. 001-leaderboard")
 
@@ -190,6 +196,11 @@ def main() -> None:
             print(f"⚔️  Battle {battle['id']} is ready!")
             for gladiator, info in battle["gladiators"].items():
                 print(f"   {gladiator}: {info['worktree']}")
+        elif args.command == "seal":
+            from judge import seal_battle  # see the note on circular imports below
+            fingerprint = seal_battle(REPO_ROOT, args.battle_id)
+            print(f"🔒 Hidden tests sealed. Fingerprint: {fingerprint}")
+            print("   Post this in the room. Any change to the tests will show up when scoring.")
         elif args.command == "score":
             # Imported here, not at the top: judge.py imports arena.py,
             # so importing it at the top would make the two files import each other.

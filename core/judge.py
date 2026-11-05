@@ -4,17 +4,60 @@ Results come only from running code, never from an AI's opinion.
 Only COMMITTED work on a gladiator's branch counts.
 """
 
+import hashlib
 import json
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ElementTree
+from datetime import datetime, timezone
 from pathlib import Path
 
 from arena import run_git
 
 # A gladiator's tests get this long before they count as failed (e.g. an infinite loop).
 TEST_TIMEOUT_SECONDS = 120
+
+
+def fingerprint_tests(hidden_tests: Path) -> str:
+    """A SHA-256 fingerprint of every hidden test file: change one character and it changes.
+
+    Files are hashed in sorted order, name + content, so the same tests always give
+    the same fingerprint. __pycache__ is skipped: Python rewrites it on every run.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(hidden_tests.rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts:
+            digest.update(str(path.relative_to(hidden_tests)).encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def seal_battle(repo_root: Path, battle_id: str) -> str:
+    """Record the hidden tests' fingerprint BEFORE gladiators start. Can only be done once."""
+    battle_dir = repo_root / "battles" / battle_id
+    battle_file = battle_dir / "battle.json"
+    battle = json.loads(battle_file.read_text())
+    hidden_tests = battle_dir / "hidden_tests"
+
+    if battle.get("sealed_fingerprint"):
+        # Re-sealing would let a judge edit the tests after seeing the solutions.
+        raise ValueError(f"Battle {battle_id} is already sealed. Seals can't be redone.")
+    if not any(hidden_tests.glob("test_*.py")):
+        raise FileNotFoundError(f"No hidden tests in {hidden_tests} to seal.")
+
+    battle["sealed_fingerprint"] = fingerprint_tests(hidden_tests)
+    battle["sealed_at"] = datetime.now(timezone.utc).isoformat()
+    battle_file.write_text(json.dumps(battle, indent=2))
+    return battle["sealed_fingerprint"]
+
+
+def check_seal(battle: dict, hidden_tests: Path) -> str:
+    """'intact', 'broken' (tests changed after sealing) or 'unsealed'."""
+    sealed = battle.get("sealed_fingerprint")
+    if not sealed:
+        return "unsealed"
+    return "intact" if fingerprint_tests(hidden_tests) == sealed else "broken"
 
 
 def changed_files(repo_root: Path, base_commit: str, branch: str) -> list[str]:
@@ -130,7 +173,14 @@ def score_battle(repo_root: Path, battle_id: str) -> dict:
     # No winner if even the best one passed nothing.
     winner_name = winner["gladiator"] if not winner["disqualified"] and winner["passed"] > 0 else None
 
-    scorecard = {"battle_id": battle_id, "task": battle["task"], "winner": winner_name, "ranking": ranked}
+    scorecard = {
+        "battle_id": battle_id,
+        "task": battle["task"],
+        "winner": winner_name,
+        "seal": check_seal(battle, hidden_tests),
+        "sealed_fingerprint": battle.get("sealed_fingerprint"),
+        "ranking": ranked,
+    }
     (battle_dir / "results.json").write_text(json.dumps(scorecard, indent=2))
     return scorecard
 
@@ -150,4 +200,13 @@ def format_scorecard(scorecard: dict) -> str:
                          f"{r['lines_changed']} code lines (+{r.get('test_lines', 0)} test lines){note}")
     lines.append("")
     lines.append(f"🏆 Winner: {scorecard['winner']}" if scorecard["winner"] else "🤷 No winner this time.")
+
+    # .get(): scorecards saved before sealing existed have no "seal" key.
+    seal = scorecard.get("seal", "unsealed")
+    if seal == "intact":
+        lines.append(f"🔒 Hidden tests sealed before the battle and unchanged ({scorecard['sealed_fingerprint'][:12]})")
+    elif seal == "broken":
+        lines.append("🚨 HIDDEN TESTS WERE CHANGED AFTER SEALING. Don't trust this result.")
+    else:
+        lines.append("⚠️ Hidden tests were never sealed for this battle.")
     return "\n".join(lines)

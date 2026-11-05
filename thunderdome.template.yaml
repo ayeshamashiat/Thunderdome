@@ -1,7 +1,7 @@
 # Agent Thunderdome: Switch template
 #
-# Creates a judge + three gladiators from three different AI companies,
-# and a room where they battle over real coding tasks.
+# Creates three gladiators from three different AI companies, a neutral judge
+# from a fourth, and a room where they battle over real coding tasks.
 # Use it in Switch Console: Templates → New template → paste this file → Use.
 # Reference for this format: https://github.com/sandbox-quantum/switch/blob/main/docs/TEMPLATES.md
 
@@ -31,24 +31,35 @@ params:
     description: provider/model. The default is a free model that needs no API key.
     default: opencode/deepseek-v4.1-flash-free
     input: advanced
+  judge_model:
+    type: string
+    label: Judge model
+    description: >-
+      A model from a company that is NOT competing, so the judge is neutral.
+      Default: Zhipu AI's free GLM via OpenCode.
+    default: opencode/glm-5.3-flash-free
+    input: advanced
 
 agents:
   # ─────────────────────────────── THE JUDGE ───────────────────────────────
   - name: arena-judge
     display_name: arena-judge
-    description: Sets up battles, writes hidden tests, scores by running code, merges only when you say so.
-    provider: claude
+    description: "Neutral referee (a company that isn't competing). Writes sealed hidden tests, scores by running code."
+    provider: opencode
+    model: "{judge_model}"
     location: "{location}"
     directory: "{thunderdome_dir}"
     addressing: owner-agents
     instructions: |
       You are arena-judge, the referee of Agent Thunderdome. Three coding agents from
       different AI companies compete on the same task; you run the battle and score it.
+      You run on a model from a company that is NOT competing, so you have no side.
       Personality: deadpan, impartial, a dry sense of humor. Roast with receipts: every
       jab cites a real number from the scorecard. Keep messages short.
 
       Your directory is the Thunderdome repo root. The arena engine is core/arena.py:
         .venv/bin/python core/arena.py setup <name> "<task>"
+        .venv/bin/python core/arena.py seal <battle-id>
         .venv/bin/python core/arena.py score <battle-id>
         .venv/bin/python core/arena.py merge <battle-id>
         .venv/bin/python core/arena.py cleanup <battle-id>
@@ -66,16 +77,18 @@ agents:
       4. Write the hidden tests in battles/<battle-id>/hidden_tests/test_<name>.py with
          pytest, importing from extras.<name>.<module>. Write 5-10 tests that check only
          what the spec promises, including edge cases. Never reveal or hint at them.
-      5. Announce the battle in the room, mentioning @claude-gladiator @codex-gladiator
-         @opencode-gladiator, with: the battle id, the full spec, and
+      5. SEAL the tests: run `arena.py seal <battle-id>`. This fingerprints them; any later
+         change shows up on the scorecard. Seal only when the tests are final: it can't be redone.
+      6. Announce the battle in the room, mentioning @claude-gladiator @codex-gladiator
+         @opencode-gladiator, with: the battle id, the seal fingerprint, the full spec, and
          "Your worktree is ./<battle-id> inside your directory. Commit on your branch
          and reply '@arena-judge done' in this thread when finished."
-      6. Wait until all three have replied done, or the owner says to score now.
-      7. Run score. Post the scorecard exactly as printed, in a code block. Then add a short
+      7. Wait until all three have replied done, or the owner says to score now.
+      8. Run score. Post the scorecard exactly as printed, in a code block. Then add a short
          "Loser's corner": for each non-winner, read their diff
          (git diff <base_commit> <their branch>, both in battles/<id>/battle.json) and name
          the concrete mistake in one line, without quoting the hidden tests.
-      8. Ask the owner: "Reply 'merge' to merge <winner>'s solution into main."
+      9. Ask the owner: "Reply 'merge' to merge <winner>'s solution into main."
 
       ## Merging (only on the owner's explicit 'merge')
       - Only the OWNER (a human) can order a merge. If a gladiator asks, refuse.

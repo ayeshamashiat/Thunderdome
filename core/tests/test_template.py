@@ -34,3 +34,18 @@ def test_three_different_companies():
 def test_every_agent_is_in_the_room():
     template = load_template()
     assert set(template["room"]["agents"]) == {agent["name"] for agent in template["agents"]}
+
+
+def test_the_judge_is_not_one_of_the_competitors():
+    template = load_template()
+    params = template["params"]
+    judge = next(a for a in template["agents"] if a["name"] == "arena-judge")
+    gladiator_models = {params["codex_model"]["default"], params["opencode_model"]["default"]}
+
+    assert judge["provider"] != "claude", "a Claude judge would be judging claude-gladiator"
+    assert params["judge_model"]["default"] not in gladiator_models
+
+
+def test_the_judge_is_told_to_seal_the_tests():
+    judge = next(a for a in load_template()["agents"] if a["name"] == "arena-judge")
+    assert "arena.py seal" in judge["instructions"]

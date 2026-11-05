@@ -2,14 +2,14 @@
 
 > **I couldn't decide which AI coding agent to trust, so I made them fight for my tasks. Switch is the arena.**
 
-Agent Thunderdome is a [Switch](https://github.com/sandbox-quantum/switch) room where coding agents from **three different AI companies** compete on the same real task. A judge agent writes hidden tests, scores every solution **by running code**, and posts a scorecard. You reply `merge` to keep the winner.
+Agent Thunderdome is a [Switch](https://github.com/sandbox-quantum/switch) room where coding agents from **three different AI companies** compete on the same real task. A judge from a **fourth company that isn't competing** writes hidden tests, **seals** them, scores every solution **by running code**, and posts a scorecard. You reply `merge` to keep the winner.
 
 | Gladiator | Agent | Model | Company |
 |---|---|---|---|
 | 🟣 `claude-gladiator`, *The Scholar* | Claude Code | your Claude plan | Anthropic |
 | 🟢 `codex-gladiator`, *The Speedrunner* | Codex | `gpt-6-luna` | OpenAI |
 | 🔵 `opencode-gladiator`, *The Underdog* | OpenCode | `deepseek-v4.1-flash-free` (free, no key) | DeepSeek |
-| ⚖️ `arena-judge` | Claude Code | your Claude plan | (decides nothing by opinion: see below) |
+| ⚖️ `arena-judge`, *neutral* | OpenCode | `glm-5.3-flash-free` (free, no key) | Zhipu AI, **not competing** |
 
 **The twist:** the gladiators built parts of their own arena. Every feature in [`extras/`](extras/) was written by whichever agent won the battle for it.
 
@@ -25,14 +25,15 @@ You ──"@judge battle: build a leaderboard"──▶ #thunderdome
                 ⚖️ arena-judge
      1. arena.py setup → one git worktree + branch per gladiator
      2. writes a precise spec + HIDDEN tests (gladiators can't see them)
-     3. @mentions all three gladiators with the spec
+     3. arena.py seal → fingerprints the tests (SHA-256) before anyone starts
+     4. @mentions all three gladiators with the spec + the seal
           │                 │                  │
      🟣 claude          🟢 codex           🔵 deepseek
      each builds in its own worktree, commits, replies "@arena-judge done"
           │                 │                  │
                 ⚖️ arena-judge
-     4. arena.py score → hidden tests + lines changed + rule checks
-     5. posts the scorecard + a "Loser's corner"
+     5. arena.py score → re-checks the seal, runs hidden tests, counts code lines, checks rules
+     6. posts the scorecard + a "Loser's corner"
                        │
 You ──"merge"──▶ arena.py merge → checkpoint tag, then merge winner into main
 ```
@@ -46,6 +47,7 @@ Example scorecard (format):
 🚫 opencode-gladiator: DISQUALIFIED (edited core/: core/engine.py)
 
 🏆 Winner: claude-gladiator
+🔒 Hidden tests sealed before the battle and unchanged (3f9a1c0e4b2d)
 ```
 
 ## Why Switch is central
@@ -62,7 +64,8 @@ Thunderdome can't exist without Switch. It uses Switch for:
 
 | Concern | How Thunderdome handles it |
 |---|---|
-| "The judge is Claude, so isn't it biased?" | The judge never decides by opinion. Winners come from **hidden tests run by `core/judge.py`**, and ties go to the smaller solution (test files don't count against you). |
+| "Is the judge on someone's side?" | The judge runs on a model from a company that **isn't competing** (Zhipu AI's GLM), and a test checks the template keeps it that way. It never decides by opinion either: winners come from **hidden tests run by `core/judge.py`**, and ties go to the smaller solution (test files don't count against you). |
+| "Could the judge change the tests after seeing the solutions?" | Tests are **sealed** with a SHA-256 fingerprint before the battle. Scoring re-checks it, flags any change with 🚨, and `merge` **refuses** a battle with a broken seal. Seals can't be redone. |
 | Gladiators overwriting each other | Each gets its own **git worktree** on its own branch. |
 | Writing code just to pass the tests | Tests live in `battles/`, which is **gitignored**, and worktrees only contain committed files, so the tests aren't in the gladiators' folders. |
 | Breaking the arena itself | Any commit touching `core/` is **automatically disqualified**. |
@@ -115,6 +118,7 @@ When the scorecard arrives, reply `merge` to keep the winner.
 | Codex: `The '<model>' model is not supported when using Codex with a ChatGPT account` | Pick a model your login allows (see `~/.codex/models_cache.json`), then set it in the template's *Codex model*. |
 | Still the old model after fixing the config | Switch keeps a session's model for its lifetime. Get a fresh session: `!remove-agent @codex-gladiator`, then `!invite-agent @codex-gladiator`. |
 | OpenCode: `You exceeded your current quota`, then `Requests ending with a model turn are not supported` | Your provider's free quota ran out mid-battle (we hit this with a free Gemini key). Use OpenCode's own free models (`opencode models \| grep free`), e.g. `opencode/deepseek-v4.1-flash-free`. |
+| The judge goes quiet for minutes | Free models can be slow when busy. Wait, or switch the judge's model (agent settings → model) to another non-competing one. As a last resort use a Claude judge: scores still come only from sealed tests, but Claude would be judging its own gladiator, so say so in your demo. |
 | A gladiator stops mid-battle | The judge scores whatever it **committed**. Ask it to commit and report done, or score without it. |
 | A gladiator's work scores 0 / "no committed changes" | Only committed work counts. The gladiator must `git commit` on its battle branch. |
 
@@ -124,8 +128,8 @@ When the scorecard arrives, reply `merge` to keep the winner.
 ```
 core/        arena engine: setup, score, merge, cleanup (never a battle target)
   arena.py   command-line entry point + git worktree handling
-  judge.py   hidden-test scoring, disqualification, ranking, scorecard
-  tests/     22 tests, each run in a throwaway git repo
+  judge.py   sealing, hidden-test scoring, disqualification, ranking, scorecard
+  tests/     30 tests, each run in a throwaway git repo
 extras/      features built by battle winners
 AGENTS.md    rulebook every gladiator follows
 opencode.json  OpenCode's model for this project
