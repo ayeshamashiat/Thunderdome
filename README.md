@@ -1,6 +1,8 @@
 # ⚔️ Agent Thunderdome
 
-> **I couldn't decide which AI coding agent to trust, so I made them fight for my tasks. Switch is the arena.**
+> **I'm a student who can't afford every premium AI model. So I made the ones I *do* have fight for my tasks, and let tests and token counts show which one is good enough. Switch is the arena.**
+
+**Why fresh tokens matter here:** on a budget, tokens are money and rate limits. In battle 002 the **free** DeepSeek model passed 10/10 hidden tests, the same as the paid agents. Now I know when the free one is enough.
 
 Agent Thunderdome is a [Switch](https://github.com/sandbox-quantum/switch) room where coding agents from **three different AI companies** compete on the same real task. A judge from a **fourth company that isn't competing** writes hidden tests, **seals** them, scores every solution **by running code**, and posts a scorecard. You reply `merge` to keep the winner.
 

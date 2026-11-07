@@ -1,4 +1,4 @@
 [tool.pytest.ini_options]
 # Lets tests write `from arena import ...` without packaging the project.
-pythonpath = ["core"]
+pythonpath = ["core", "."]   # "." so extras.* imports work, as battle specs promise
 testpaths = ["core/tests", "extras"]
